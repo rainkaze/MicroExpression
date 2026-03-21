@@ -1,0 +1,21 @@
+name: Sync to Gitee
+
+on:
+  push:
+    branches: [ master ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Sync to Gitee
+      uses: wearerequired/git-mirror-action@master
+      with:
+        source-repo: "https://github.com/rainkaze/MicroExpression.git"
+        destination-repo: "https://${{ secrets.GITEE_USERNAME }}:${{ secrets.GITEE_TOKEN }}@gitee.com/${{ secrets.GITEE_USERNAME }}/MicroExpression.git"
