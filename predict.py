@@ -51,6 +51,4 @@ def predict(img_path):
 
 
 if __name__ == "__main__":
-    # 在这里输入你想测试的照片路径
-    # 比如你在项目根目录下放了一张 me.jpg
     predict('predictPic/pre06.jpg')
