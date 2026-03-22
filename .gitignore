@@ -15,6 +15,7 @@ venv/
 ENV/
 env/
 .env
+logs/
 
 # --- IDE (PyCharm / VSCode) ---
 .idea/
