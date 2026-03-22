@@ -11,7 +11,7 @@ import os
 def main():
     # --- 1. 参数配置 ---
     DATA_PATH = r'C:\data'
-    CHECKPOINT_DIR = './checkpoints'
+    CHECKPOINT_DIR = '../checkpoints'
     os.makedirs(CHECKPOINT_DIR, exist_ok=True)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")

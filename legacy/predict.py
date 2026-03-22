@@ -17,7 +17,7 @@ def predict(img_path):
 
     # 2. 加载模型
     model = AttentionNet(num_classes=len(class_map)).to(device)
-    model_path = './checkpoints/best_model.pth'
+    model_path = '../checkpoints/best_model.pth'
     model.load_state_dict(torch.load(model_path, map_location=device))
     model.eval()
 
@@ -51,4 +51,4 @@ def predict(img_path):
 
 
 if __name__ == "__main__":
-    predict('predictPic/pre06.jpg')
+    predict('../predictPic/pre06.jpg')
