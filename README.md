@@ -64,29 +64,6 @@ python train_loso.py
 
 训练完成后，`checkpoints/` 目录下会生成 26 个针对不同被试者的最优模型。
 
-
-### 4. 使用自定义图片 / 视频进行推理
-
-```bash
-# 使用 onset/apex 两张图像
-python infer_custom.py --checkpoint checkpoints/best_model_fold_01.pth --image-a path/to/onset.jpg --image-b path/to/apex.jpg
-
-# 使用视频中的两帧
-python infer_custom.py --checkpoint checkpoints/best_model_fold_01.pth --video demo.mp4 --onset-frame 3 --apex-frame 12
-```
-
-推理结果会输出类别概率，并在 `outputs/inference/` 下保存 onset/apex、光流可视化图与 `u/v` 光流数据。
-
-### 5. 训练过程可视化
-
-运行 `python train_loso.py` 后，会在 `outputs/training/` 下保存：
-
-- 每个 fold 的 loss / accuracy 曲线图
-- 每个 fold 的指标 JSON（accuracy / UAR / UF1 / confusion matrix）
-- LOSO 汇总指标 JSON
-
-详细说明见 `docs/PROJECT_WALKTHROUGH.md`。
-
 ## ⚖️ 开源协议
 
 本项目采用 [MIT License](https://www.google.com/search?q=LICENSE) 开源协议。
