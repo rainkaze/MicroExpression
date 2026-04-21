@@ -1,35 +1,39 @@
-import torch
 import numpy as np
+import torch
+
+from src.dataset import EMOTION_CLASSES
 from src.models.sfamnet import SFAMNetLite
 
 
-def quick_predict(u_path, v_path, model_fold='08'):
-    # 加载模型
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    model = SFAMNetLite(num_classes=4).to(device)
+def build_flow_representation(u: np.ndarray, v: np.ndarray) -> np.ndarray:
+    magnitude = np.log1p(np.sqrt(np.square(u) + np.square(v)))
+    orientation = np.arctan2(v, u) / np.pi
+    return np.stack([u, v, magnitude, orientation], axis=0).astype(np.float32)
 
-    weight_path = f'./checkpoints/best_model_fold_{model_fold}.pth'
-    model.load_state_dict(torch.load(weight_path))
+
+def quick_predict(u_path: str, v_path: str, model_fold: str = "08") -> None:
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model = SFAMNetLite(num_classes=len(EMOTION_CLASSES)).to(device)
+
+    weight_path = f"./checkpoints/7class/best_model_fold_{model_fold}.pth"
+    model.load_state_dict(torch.load(weight_path, map_location=device))
     model.eval()
 
-    # 读取预处理好的光流数据
     u = np.load(u_path).astype(np.float32)
     v = np.load(v_path).astype(np.float32)
-
-    u_tensor = torch.from_numpy(u).unsqueeze(0).unsqueeze(0).to(device)
-    v_tensor = torch.from_numpy(v).unsqueeze(0).unsqueeze(0).to(device)
+    flow = build_flow_representation(u, v)
+    flow_tensor = torch.from_numpy(flow).unsqueeze(0).to(device)
 
     with torch.no_grad():
-        output = model(u_tensor, v_tensor)
+        output = model(flow_tensor)
         probs = torch.softmax(output, dim=1)
         pred = torch.argmax(probs, dim=1).item()
 
-    emotions = ['Positive', 'Negative', 'Surprise', 'Others']
-    print(f"--- 预测完成 ---")
-    print(f"AI 认为该微表情是: {emotions[pred]} (置信度: {probs[0][pred]:.2%})")
+    print("--- Prediction Complete ---")
+    print(f"Predicted emotion: {EMOTION_CLASSES[pred]} (confidence: {probs[0][pred]:.2%})")
 
 
 if __name__ == "__main__":
-    test_u = './data/CASME II/processed/u/sub01_EP02_01f.npy'
-    test_v = './data/CASME II/processed/v/sub01_EP02_01f.npy'
+    test_u = "./data/CASME II/processed/u/sub01_EP02_01f.npy"
+    test_v = "./data/CASME II/processed/v/sub01_EP02_01f.npy"
     quick_predict(test_u, test_v)

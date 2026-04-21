@@ -1,117 +1,405 @@
+import copy
+import os
+import random
+from collections import Counter
+
+import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import torch.optim as optim
-from torch.utils.data import DataLoader
-import numpy as np
-import os
+from torch.utils.data import DataLoader, WeightedRandomSampler
 
-from src.dataset import CASME2FlowDataset
+from src.dataset import CASME2FlowDataset, COARSE_CLASSES, EMOTION_CLASSES
 from src.models.sfamnet import SFAMNetLite
 from src.utils.logger import setup_logger
+from src.utils.metrics import classification_metrics
 
-# --- 全局配置 (业界通常使用 Config 类或 YAML) ---
+
 CONFIG = {
-    'processed_dir': './data/CASME II/processed',
-    'csv_path': './data/CASME II/CASME2-coding-20140508.xlsx',
-    'checkpoints_dir': './checkpoints',
-    'log_dir': './logs',
-    'batch_size': 32,
-    'epochs': 60,
-    'lr': 0.001,
-    'device': 'cuda' if torch.cuda.is_available() else 'cpu'
+    "processed_dir": "./data/CASME II/processed",
+    "csv_path": "./data/CASME II/CASME2-coding-20140508.xlsx",
+    "checkpoints_dir": "./checkpoints/7class",
+    "log_dir": "./logs",
+    "batch_size": 10,
+    "pretrain_epochs": 20,
+    "finetune_epochs": 50,
+    "pretrain_lr": 3e-4,
+    "finetune_lr": 2e-4,
+    "min_lr": 2e-5,
+    "weight_decay": 3e-4,
+    "temperature": 0.12,
+    "class_balance_beta": 0.999,
+    "focal_gamma": 1.5,
+    "aux_weight": 0.35,
+    "early_stop_patience": 16,
+    "num_workers": 0,
+    "pin_memory": True,
+    "seed": 42,
+    "device": "cuda" if torch.cuda.is_available() else "cpu",
 }
 
 
-def train_one_fold(fold_id, train_subs, test_subs):
-    """
-    完成单一 Fold (LOSO 中的一次完整训练)
-    """
-    logger = setup_logger(CONFIG['log_dir'], f"fold_sub{test_subs[0]}")
-    logger.info(f"开始训练 Fold: 测试集为被试者 {test_subs}")
+class ClassBalancedFocalLoss(nn.Module):
+    def __init__(self, class_weights: torch.Tensor, gamma: float = 1.5) -> None:
+        super().__init__()
+        self.register_buffer("class_weights", class_weights)
+        self.gamma = gamma
 
-    # 1. 准备数据加载器
-    train_dataset = CASME2FlowDataset(CONFIG['processed_dir'], CONFIG['csv_path'], subjects=train_subs)
-    test_dataset = CASME2FlowDataset(CONFIG['processed_dir'], CONFIG['csv_path'], subjects=test_subs)
+    def forward(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+        log_probs = F.log_softmax(logits, dim=1)
+        probs = log_probs.exp()
+        target_log_probs = log_probs.gather(1, targets.unsqueeze(1)).squeeze(1)
+        target_probs = probs.gather(1, targets.unsqueeze(1)).squeeze(1)
+        focal = torch.pow(1.0 - target_probs, self.gamma)
+        weights = self.class_weights[targets]
+        return (-weights * focal * target_log_probs).mean()
 
-    train_loader = DataLoader(train_dataset, batch_size=CONFIG['batch_size'], shuffle=True)
-    test_loader = DataLoader(test_dataset, batch_size=CONFIG['batch_size'], shuffle=False)
 
-    # 2. 初始化模型、损失函数、优化器
-    model = SFAMNetLite(num_classes=4).to(CONFIG['device'])
-    criterion = nn.CrossEntropyLoss()
-    optimizer = optim.AdamW(model.parameters(), lr=CONFIG['lr'], weight_decay=1e-4)
-    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=CONFIG['epochs'])
+class SupConLoss(nn.Module):
+    def __init__(self, temperature: float = 0.12) -> None:
+        super().__init__()
+        self.temperature = temperature
 
-    best_acc = 0.0
+    def forward(self, features: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
+        device = features.device
+        labels = labels.contiguous().view(-1, 1)
+        mask = torch.eq(labels, labels.T).float().to(device)
 
-    # 3. 训练循环
-    for epoch in range(CONFIG['epochs']):
+        logits = torch.div(torch.matmul(features, features.T), self.temperature)
+        logits_max, _ = torch.max(logits, dim=1, keepdim=True)
+        logits = logits - logits_max.detach()
+
+        logits_mask = torch.ones_like(mask) - torch.eye(mask.size(0), device=device)
+        mask = mask * logits_mask
+
+        exp_logits = torch.exp(logits) * logits_mask
+        log_prob = logits - torch.log(exp_logits.sum(dim=1, keepdim=True) + 1e-8)
+
+        positive_counts = mask.sum(dim=1)
+        mean_log_prob_pos = (mask * log_prob).sum(dim=1) / torch.clamp(positive_counts, min=1.0)
+        valid = positive_counts > 0
+        if valid.any():
+            return -mean_log_prob_pos[valid].mean()
+        return -mean_log_prob_pos.mean()
+
+
+def set_seed(seed: int) -> None:
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+
+
+def split_train_val_subjects(train_subjects: list[str], fold_id: int) -> tuple[list[str], list[str]]:
+    ordered = sorted(train_subjects)
+    val_count = max(4, len(ordered) // 5)
+    offset = fold_id % len(ordered)
+    rotated = ordered[offset:] + ordered[:offset]
+    val_subjects = sorted(rotated[:val_count])
+    train_split_subjects = sorted([sub for sub in ordered if sub not in val_subjects])
+    return train_split_subjects, val_subjects
+
+
+def build_class_weights(dataset: CASME2FlowDataset, beta: float, key: str) -> torch.Tensor:
+    counts = Counter(sample[key] for sample in dataset.samples)
+    num_classes = len(EMOTION_CLASSES) if key == "label" else len(COARSE_CLASSES)
+    weights = torch.zeros(num_classes, dtype=torch.float32)
+    for label_idx in range(num_classes):
+        count = counts.get(label_idx, 0)
+        if count == 0:
+            continue
+        effective_num = 1.0 - np.power(beta, count)
+        weights[label_idx] = (1.0 - beta) / effective_num
+    mask = weights > 0
+    weights[mask] = weights[mask] / weights[mask].mean()
+    return weights
+
+
+def build_sampler(dataset: CASME2FlowDataset, class_weights: torch.Tensor) -> WeightedRandomSampler:
+    sample_weights = [class_weights[sample["label"]].item() for sample in dataset.samples]
+    return WeightedRandomSampler(
+        weights=torch.DoubleTensor(sample_weights),
+        num_samples=max(len(sample_weights), len(sample_weights) * 2),
+        replacement=True,
+    )
+
+
+def recompute_geometry(flow: torch.Tensor) -> torch.Tensor:
+    u = flow[:, 0:1]
+    v = flow[:, 1:2]
+    magnitude = torch.log1p(torch.sqrt(u.square() + v.square() + 1e-8))
+    orientation = torch.atan2(v, u) / np.pi
+    return torch.cat([u, v, magnitude, orientation], dim=1)
+
+
+def augment_flow_batch(flow: torch.Tensor) -> torch.Tensor:
+    aug = flow.clone()
+
+    flip_h = torch.rand(aug.size(0), device=aug.device) < 0.5
+    flip_v = torch.rand(aug.size(0), device=aug.device) < 0.15
+    scale_mask = torch.rand(aug.size(0), device=aug.device) < 0.25
+    noise_mask = torch.rand(aug.size(0), device=aug.device) < 0.15
+
+    if flip_h.any():
+        aug[flip_h] = torch.flip(aug[flip_h], dims=[3])
+        aug[flip_h, 0:1] = -aug[flip_h, 0:1]
+
+    if flip_v.any():
+        aug[flip_v] = torch.flip(aug[flip_v], dims=[2])
+        aug[flip_v, 1:2] = -aug[flip_v, 1:2]
+
+    if scale_mask.any():
+        scales = torch.empty(scale_mask.sum(), 1, 1, 1, device=aug.device).uniform_(0.93, 1.07)
+        aug[scale_mask, 0:2] = aug[scale_mask, 0:2] * scales
+
+    if noise_mask.any():
+        aug[noise_mask, 0:2] = aug[noise_mask, 0:2] + 0.01 * torch.randn_like(aug[noise_mask, 0:2])
+
+    aug = recompute_geometry(aug)
+    return aug
+
+
+def evaluate_model(
+    model: SFAMNetLite,
+    data_loader: DataLoader,
+    criterion_fine: nn.Module,
+    device: str,
+) -> dict[str, float | np.ndarray]:
+    model.eval()
+    losses = []
+    all_labels = []
+    all_preds = []
+
+    with torch.no_grad():
+        for flow, labels, _ in data_loader:
+            flow = flow.to(device, non_blocking=True)
+            labels = labels.to(device, non_blocking=True)
+            logits = model(flow)
+            loss = criterion_fine(logits, labels)
+            losses.append(loss.item())
+            preds = torch.argmax(logits, dim=1)
+            all_labels.extend(labels.cpu().tolist())
+            all_preds.extend(preds.cpu().tolist())
+
+    metrics = classification_metrics(all_labels, all_preds, len(EMOTION_CLASSES))
+    metrics["loss"] = float(np.mean(losses)) if losses else 0.0
+    return metrics
+
+
+def run_pretrain_stage(model: SFAMNetLite, train_loader: DataLoader, logger) -> None:
+    criterion = SupConLoss(temperature=CONFIG["temperature"])
+    optimizer = optim.AdamW(
+        list(model.stream_u.parameters())
+        + list(model.stream_v.parameters())
+        + list(model.stream_geom.parameters())
+        + list(model.fusion_gate.parameters())
+        + list(model.embedding_head.parameters())
+        + list(model.projection_head.parameters()),
+        lr=CONFIG["pretrain_lr"],
+        weight_decay=CONFIG["weight_decay"],
+    )
+
+    for epoch in range(1, CONFIG["pretrain_epochs"] + 1):
         model.train()
-        train_loss = 0.0
-        for u, v, labels in train_loader:
-            u, v, labels = u.to(CONFIG['device']), v.to(CONFIG['device']), labels.to(CONFIG['device'])
+        losses = []
+        for flow, labels, _ in train_loader:
+            flow = flow.to(CONFIG["device"], non_blocking=True)
+            labels = labels.to(CONFIG["device"], non_blocking=True)
+
+            view1 = augment_flow_batch(flow)
+            view2 = augment_flow_batch(flow)
+            embed1 = model.project(model.encode(view1))
+            embed2 = model.project(model.encode(view2))
+
+            features = torch.cat([embed1, embed2], dim=0)
+            contrast_labels = torch.cat([labels, labels], dim=0)
 
             optimizer.zero_grad()
-            outputs = model(u, v)
-            loss = criterion(outputs, labels)
+            loss = criterion(features, contrast_labels)
             loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             optimizer.step()
-            train_loss += loss.item()
+            losses.append(loss.item())
+
+        logger.info(
+            "Pretrain [%d/%d] contrastive_loss=%.4f",
+            epoch,
+            CONFIG["pretrain_epochs"],
+            float(np.mean(losses)) if losses else 0.0,
+        )
+
+
+def run_finetune_stage(
+    model: SFAMNetLite,
+    train_loader: DataLoader,
+    val_loader: DataLoader,
+    test_loader: DataLoader,
+    fine_weights: torch.Tensor,
+    coarse_weights: torch.Tensor,
+    test_subject: str,
+    logger,
+) -> dict[str, object]:
+    criterion_fine = ClassBalancedFocalLoss(fine_weights.to(CONFIG["device"]), gamma=CONFIG["focal_gamma"])
+    criterion_coarse = nn.CrossEntropyLoss(weight=coarse_weights.to(CONFIG["device"]))
+
+    optimizer = optim.AdamW(model.parameters(), lr=CONFIG["finetune_lr"], weight_decay=CONFIG["weight_decay"])
+    scheduler = optim.lr_scheduler.CosineAnnealingLR(
+        optimizer,
+        T_max=CONFIG["finetune_epochs"],
+        eta_min=CONFIG["min_lr"],
+    )
+
+    best_state = None
+    best_metric = -1.0
+    best_epoch = 0
+    patience_counter = 0
+
+    for epoch in range(1, CONFIG["finetune_epochs"] + 1):
+        model.train()
+        epoch_losses = []
+        for flow, fine_labels, coarse_labels in train_loader:
+            flow = flow.to(CONFIG["device"], non_blocking=True)
+            fine_labels = fine_labels.to(CONFIG["device"], non_blocking=True)
+            coarse_labels = coarse_labels.to(CONFIG["device"], non_blocking=True)
+            flow = augment_flow_batch(flow)
+
+            optimizer.zero_grad()
+            fine_logits, coarse_logits = model.forward_multitask(flow)
+            loss_fine = criterion_fine(fine_logits, fine_labels)
+            loss_coarse = criterion_coarse(coarse_logits, coarse_labels)
+            loss = loss_fine + CONFIG["aux_weight"] * loss_coarse
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            optimizer.step()
+            epoch_losses.append(loss.item())
 
         scheduler.step()
+        train_loss = float(np.mean(epoch_losses)) if epoch_losses else 0.0
+        val_metrics = evaluate_model(model, val_loader, criterion_fine, CONFIG["device"])
+        val_score = (
+            0.10 * float(val_metrics["accuracy"])
+            + 0.35 * float(val_metrics["uar"])
+            + 0.55 * float(val_metrics["macro_f1"])
+        )
 
-        # 验证
-        model.eval()
-        correct = 0
-        total = 0
-        with torch.no_grad():
-            for u, v, labels in test_loader:
-                u, v, labels = u.to(CONFIG['device']), v.to(CONFIG['device']), labels.to(CONFIG['device'])
-                outputs = model(u, v)
-                _, predicted = torch.max(outputs.data, 1)
-                total += labels.size(0)
-                correct += (predicted == labels).sum().item()
+        if val_score > best_metric:
+            best_metric = val_score
+            best_epoch = epoch
+            patience_counter = 0
+            best_state = copy.deepcopy(model.state_dict())
+        else:
+            patience_counter += 1
 
-        acc = 100 * correct / total if total > 0 else 0
-        if acc > best_acc:
-            best_acc = acc
-            # 保存该 Fold 的最佳权重
-            save_path = os.path.join(CONFIG['checkpoints_dir'], f"best_model_fold_{test_subs[0]}.pth")
-            torch.save(model.state_dict(), save_path)
+        logger.info(
+            "Finetune [%d/%d] train_loss=%.4f val_loss=%.4f val_acc=%.2f%% val_uar=%.2f%% val_macro_f1=%.2f%% lr=%.6f",
+            epoch,
+            CONFIG["finetune_epochs"],
+            train_loss,
+            float(val_metrics["loss"]),
+            100.0 * float(val_metrics["accuracy"]),
+            100.0 * float(val_metrics["uar"]),
+            100.0 * float(val_metrics["macro_f1"]),
+            optimizer.param_groups[0]["lr"],
+        )
 
-        if (epoch + 1) % 10 == 0:
-            logger.info(
-                f"Epoch [{epoch + 1}/{CONFIG['epochs']}] Loss: {train_loss / len(train_loader):.4f} Acc: {acc:.2f}%")
+        if patience_counter >= CONFIG["early_stop_patience"]:
+            logger.info("Early stopping at finetune epoch %d", epoch)
+            break
 
-    logger.info(f"Fold {test_subs[0]} 完成! 最佳准确率: {best_acc:.2f}%")
-    return best_acc
+    if best_state is None:
+        raise RuntimeError(f"Fold {test_subject} failed to produce a checkpoint.")
+
+    model.load_state_dict(best_state)
+    checkpoint_path = os.path.join(CONFIG["checkpoints_dir"], f"best_model_fold_{test_subject}.pth")
+    torch.save(best_state, checkpoint_path)
+
+    test_metrics = evaluate_model(model, test_loader, criterion_fine, CONFIG["device"])
+    logger.info(
+        "Fold %s complete | best_epoch=%d | test_acc=%.2f%% | test_uar=%.2f%% | test_macro_f1=%.2f%%",
+        test_subject,
+        best_epoch,
+        100.0 * float(test_metrics["accuracy"]),
+        100.0 * float(test_metrics["uar"]),
+        100.0 * float(test_metrics["macro_f1"]),
+    )
+    return {
+        "test_subject": test_subject,
+        "best_epoch": best_epoch,
+        "checkpoint_path": checkpoint_path,
+        "metrics": test_metrics,
+    }
 
 
-def main():
-    # 建立必要目录
-    os.makedirs(CONFIG['checkpoints_dir'], exist_ok=True)
-
-    # 1. 获取所有 Subject 列表 (根据 CASME II 共有 26 个被试)
-    # 这里的 1-26 是 CASME II 的标准被试编号
+def train_one_fold(fold_id: int, test_subject: str) -> dict[str, object]:
     all_subjects = [str(i).zfill(2) for i in range(1, 27)]
+    train_subjects = [sub for sub in all_subjects if sub != test_subject]
+    train_split_subjects, val_subjects = split_train_val_subjects(train_subjects, fold_id)
 
-    # 排除数据集中缺失的编号（如果有的话）
-    # 比如某些 Subject 可能因为数据质量被剔除
+    logger = setup_logger(CONFIG["log_dir"], f"fold_sub{test_subject}")
+    logger.info(
+        "Fold %s | train=%s | val=%s | test=%s",
+        test_subject,
+        train_split_subjects,
+        val_subjects,
+        [test_subject],
+    )
 
-    results = []
+    train_dataset = CASME2FlowDataset(CONFIG["processed_dir"], CONFIG["csv_path"], subjects=train_split_subjects, augment=False)
+    val_dataset = CASME2FlowDataset(CONFIG["processed_dir"], CONFIG["csv_path"], subjects=val_subjects, augment=False)
+    test_dataset = CASME2FlowDataset(CONFIG["processed_dir"], CONFIG["csv_path"], subjects=[test_subject], augment=False)
 
-    # 2. 执行 LOSO 循环
-    for i in range(len(all_subjects)):
-        test_sub = [all_subjects[i]]
-        train_subs = [s for s in all_subjects if s not in test_sub]
+    fine_weights = build_class_weights(train_dataset, CONFIG["class_balance_beta"], key="label")
+    coarse_weights = build_class_weights(train_dataset, CONFIG["class_balance_beta"], key="coarse_label")
+    sampler = build_sampler(train_dataset, fine_weights)
 
-        fold_acc = train_one_fold(i, train_subs, test_sub)
-        results.append(fold_acc)
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=CONFIG["batch_size"],
+        sampler=sampler,
+        num_workers=CONFIG["num_workers"],
+        pin_memory=CONFIG["pin_memory"] and CONFIG["device"] == "cuda",
+    )
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=CONFIG["batch_size"],
+        shuffle=False,
+        num_workers=CONFIG["num_workers"],
+        pin_memory=CONFIG["pin_memory"] and CONFIG["device"] == "cuda",
+    )
+    test_loader = DataLoader(
+        test_dataset,
+        batch_size=CONFIG["batch_size"],
+        shuffle=False,
+        num_workers=CONFIG["num_workers"],
+        pin_memory=CONFIG["pin_memory"] and CONFIG["device"] == "cuda",
+    )
 
-    # 3. 输出最终评估结果
-    print("\n" + "=" * 30)
-    print(f"LOSO 最终平均准确率: {np.mean(results):.2f}%")
-    print("=" * 30)
+    model = SFAMNetLite(num_classes=len(EMOTION_CLASSES), coarse_classes=len(COARSE_CLASSES)).to(CONFIG["device"])
+    run_pretrain_stage(model, train_loader, logger)
+    return run_finetune_stage(model, train_loader, val_loader, test_loader, fine_weights, coarse_weights, test_subject, logger)
+
+
+def main() -> None:
+    os.makedirs(CONFIG["checkpoints_dir"], exist_ok=True)
+    os.makedirs(CONFIG["log_dir"], exist_ok=True)
+    set_seed(CONFIG["seed"])
+
+    fold_results = []
+    all_subjects = [str(i).zfill(2) for i in range(1, 27)]
+    for fold_id, test_subject in enumerate(all_subjects):
+        fold_results.append(train_one_fold(fold_id, test_subject))
+
+    mean_acc = np.mean([float(result["metrics"]["accuracy"]) for result in fold_results])
+    mean_uar = np.mean([float(result["metrics"]["uar"]) for result in fold_results])
+    mean_macro_f1 = np.mean([float(result["metrics"]["macro_f1"]) for result in fold_results])
+
+    print("\n" + "=" * 40)
+    print(f"7-class LOSO accuracy: {mean_acc * 100:.2f}%")
+    print(f"7-class LOSO UAR: {mean_uar * 100:.2f}%")
+    print(f"7-class LOSO Macro-F1: {mean_macro_f1 * 100:.2f}%")
+    print("=" * 40)
 
 
 if __name__ == "__main__":
