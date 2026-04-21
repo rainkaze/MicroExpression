@@ -44,10 +44,9 @@ def evaluate_loso() -> None:
         model.eval()
 
         with torch.no_grad():
-            for u, v, label in test_loader:
-                u = u.to(CONFIG["device"])
-                v = v.to(CONFIG["device"])
-                outputs = model(u, v)
+            for flow, label, _ in test_loader:
+                flow = flow.to(CONFIG["device"])
+                outputs = model(flow)
                 preds = torch.argmax(outputs, dim=1)
 
                 all_preds.extend(preds.cpu().tolist())

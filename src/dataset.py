@@ -23,6 +23,17 @@ EMOTION_ALIASES = {
     "repressed happiness": "happiness",
     "tense": "others",
 }
+COARSE_CLASSES = ["positive", "negative", "surprise", "others"]
+COARSE_TO_LABEL = {name: idx for idx, name in enumerate(COARSE_CLASSES)}
+FINE_TO_COARSE = {
+    "happiness": "positive",
+    "disgust": "negative",
+    "repression": "negative",
+    "sadness": "negative",
+    "fear": "negative",
+    "surprise": "surprise",
+    "others": "others",
+}
 
 
 def normalize_emotion_name(emotion: str) -> str:
@@ -74,6 +85,7 @@ class CASME2FlowDataset(Dataset):
             row["u_path"] = u_path
             row["v_path"] = v_path
             row["label"] = EMOTION_TO_LABEL[emotion]
+            row["coarse_label"] = COARSE_TO_LABEL[FINE_TO_COARSE[emotion]]
             valid_rows.append(row)
 
         if not valid_rows:
@@ -109,7 +121,16 @@ class CASME2FlowDataset(Dataset):
 
         return u, v
 
-    def __getitem__(self, index: int) -> tuple[torch.Tensor, torch.Tensor, int]:
+    @staticmethod
+    def _build_representation(u: np.ndarray, v: np.ndarray) -> np.ndarray:
+        magnitude = np.sqrt(np.square(u) + np.square(v))
+        magnitude = np.log1p(magnitude)
+
+        orientation = np.arctan2(v, u) / np.pi
+        representation = np.stack([u, v, magnitude, orientation], axis=0).astype(np.float32)
+        return representation
+
+    def __getitem__(self, index: int) -> tuple[torch.Tensor, int, int]:
         row = self.samples[index]
         u = np.load(row["u_path"]).astype(np.float32)
         v = np.load(row["v_path"]).astype(np.float32)
@@ -122,6 +143,6 @@ class CASME2FlowDataset(Dataset):
         if self.augment:
             u, v = self._augment_flow(u, v)
 
-        u_tensor = torch.from_numpy(np.ascontiguousarray(u)).unsqueeze(0)
-        v_tensor = torch.from_numpy(np.ascontiguousarray(v)).unsqueeze(0)
-        return u_tensor, v_tensor, int(row["label"])
+        flow = self._build_representation(u, v)
+        flow_tensor = torch.from_numpy(np.ascontiguousarray(flow))
+        return flow_tensor, int(row["label"]), int(row["coarse_label"])
