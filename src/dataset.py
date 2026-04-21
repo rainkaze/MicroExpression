@@ -1,68 +1,127 @@
 import os
-import pandas as pd
+import random
+from typing import Iterable
+
 import numpy as np
+import pandas as pd
 import torch
 from torch.utils.data import Dataset
 
 
-class CASME2FlowDataset(Dataset):
-    def __init__(self, processed_dir, csv_path, subjects=None, transform=None):
-        self.processed_dir = processed_dir
-        self.transform = transform
+EMOTION_CLASSES = [
+    "happiness",
+    "disgust",
+    "surprise",
+    "repression",
+    "sadness",
+    "fear",
+    "others",
+]
 
-        # 1. 读取 Excel
+EMOTION_TO_LABEL = {name: idx for idx, name in enumerate(EMOTION_CLASSES)}
+EMOTION_ALIASES = {
+    "repressed happiness": "happiness",
+    "tense": "others",
+}
+
+
+def normalize_emotion_name(emotion: str) -> str:
+    normalized = str(emotion).strip().lower()
+    return EMOTION_ALIASES.get(normalized, normalized)
+
+
+class CASME2FlowDataset(Dataset):
+    def __init__(
+        self,
+        processed_dir: str,
+        csv_path: str,
+        subjects: Iterable[str] | None = None,
+        augment: bool = False,
+        target_size: tuple[int, int] = (128, 128),
+    ) -> None:
+        self.processed_dir = processed_dir
+        self.augment = augment
+        self.target_size = target_size
+
         df = pd.read_excel(csv_path)
         df.columns = [str(c).strip() for c in df.columns]
+        df = df[pd.to_numeric(df["OnsetFrame"], errors="coerce").notnull()].copy()
+        df["Subject"] = df["Subject"].apply(lambda x: str(int(x)).zfill(2))
+        df["Filename"] = df["Filename"].astype(str).str.strip()
+        df["Estimated Emotion"] = df["Estimated Emotion"].apply(normalize_emotion_name)
 
-        # 2. 过滤无效行
-        df = df[pd.to_numeric(df['OnsetFrame'], errors='coerce').notnull()]
-
-        # 3. 如果指定了被试（LOSO 核心逻辑），则只保留对应被试的数据
         if subjects is not None:
-            # 确保 Subject 列是字符串格式并补齐两位，以便匹配
-            df['Subject'] = df['Subject'].apply(lambda x: str(int(x)).zfill(2))
-            df = df[df['Subject'].isin(subjects)]
+            subjects = set(subjects)
+            df = df[df["Subject"].isin(subjects)].copy()
 
-        self.df = df
-        self.samples = self.df.to_dict('records')
+        valid_rows = []
+        missing_samples = []
+        unknown_labels = []
 
-        # 4. 标签映射 (4分类标准)
-        self.label_map = {
-            'happiness': 0, 'repressed happiness': 0,
-            'disgust': 1, 'sadness': 1, 'fear': 1,
-            'surprise': 2,
-            'others': 3, 'repression': 3, 'tense': 3
-        }
+        for row in df.to_dict("records"):
+            emotion = row["Estimated Emotion"]
+            if emotion not in EMOTION_TO_LABEL:
+                unknown_labels.append(emotion)
+                continue
 
-    def __len__(self):
+            sample_id = f"sub{row['Subject']}_{row['Filename']}"
+            u_path = os.path.join(self.processed_dir, "u", f"{sample_id}.npy")
+            v_path = os.path.join(self.processed_dir, "v", f"{sample_id}.npy")
+            if not os.path.exists(u_path) or not os.path.exists(v_path):
+                missing_samples.append(sample_id)
+                continue
+
+            row["u_path"] = u_path
+            row["v_path"] = v_path
+            row["label"] = EMOTION_TO_LABEL[emotion]
+            valid_rows.append(row)
+
+        if not valid_rows:
+            raise RuntimeError("No valid samples were found for the requested split.")
+
+        self.samples = valid_rows
+        self.missing_samples = missing_samples
+        self.unknown_labels = sorted(set(unknown_labels))
+
+    def __len__(self) -> int:
         return len(self.samples)
 
-    def __getitem__(self, index):
+    def _augment_flow(self, u: np.ndarray, v: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        if random.random() < 0.5:
+            u = np.flip(u, axis=1).copy()
+            v = np.flip(v, axis=1).copy()
+            u = -u
+
+        if random.random() < 0.2:
+            u = np.flip(u, axis=0).copy()
+            v = np.flip(v, axis=0).copy()
+            v = -v
+
+        if random.random() < 0.3:
+            scale = random.uniform(0.9, 1.1)
+            u = u * scale
+            v = v * scale
+
+        if random.random() < 0.2:
+            noise_std = random.uniform(0.0, 0.01)
+            u = u + np.random.normal(0.0, noise_std, size=u.shape).astype(np.float32)
+            v = v + np.random.normal(0.0, noise_std, size=v.shape).astype(np.float32)
+
+        return u, v
+
+    def __getitem__(self, index: int) -> tuple[torch.Tensor, torch.Tensor, int]:
         row = self.samples[index]
-        sub = str(int(row['Subject'])).zfill(2)
-        filename = str(row['Filename']).strip()
+        u = np.load(row["u_path"]).astype(np.float32)
+        v = np.load(row["v_path"]).astype(np.float32)
 
-        # 对应预处理生成的文件名
-        sample_id = f"sub{sub}_{filename}"
-        u_path = os.path.join(self.processed_dir, 'u', f"{sample_id}.npy")
-        v_path = os.path.join(self.processed_dir, 'v', f"{sample_id}.npy")
+        if u.shape != self.target_size or v.shape != self.target_size:
+            raise ValueError(
+                f"Unexpected flow shape for {row['u_path']}: {u.shape}, {v.shape}"
+            )
 
-        # 容错处理：如果预处理失败的文件，跳过加载
-        if not os.path.exists(u_path):
-            # 实际项目中这里通常返回一个随机样本，或者在 __init__ 中就剔除不存在的文件
-            # 这里简单处理：返回全 0 张量
-            u = np.zeros((128, 128), dtype=np.float32)
-            v = np.zeros((128, 128), dtype=np.float32)
-        else:
-            u = np.load(u_path).astype(np.float32)
-            v = np.load(v_path).astype(np.float32)
+        if self.augment:
+            u, v = self._augment_flow(u, v)
 
-        # 增加维度 [H, W] -> [1, H, W]
-        u_tensor = torch.from_numpy(u).unsqueeze(0)
-        v_tensor = torch.from_numpy(v).unsqueeze(0)
-
-        # 获取标签
-        emotion = str(row['Estimated Emotion']).lower().strip()
-        label = self.label_map.get(emotion, 3)  # 找不到则默认为 others
-
-        return u_tensor, v_tensor, label
+        u_tensor = torch.from_numpy(np.ascontiguousarray(u)).unsqueeze(0)
+        v_tensor = torch.from_numpy(np.ascontiguousarray(v)).unsqueeze(0)
+        return u_tensor, v_tensor, int(row["label"])
