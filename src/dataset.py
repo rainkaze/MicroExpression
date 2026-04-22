@@ -104,11 +104,6 @@ class CASME2FlowDataset(Dataset):
             v = np.flip(v, axis=1).copy()
             u = -u
 
-        if random.random() < 0.2:
-            u = np.flip(u, axis=0).copy()
-            v = np.flip(v, axis=0).copy()
-            v = -v
-
         if random.random() < 0.3:
             scale = random.uniform(0.9, 1.1)
             u = u * scale
@@ -124,7 +119,12 @@ class CASME2FlowDataset(Dataset):
     @staticmethod
     def _build_representation(u: np.ndarray, v: np.ndarray) -> np.ndarray:
         magnitude = np.sqrt(np.square(u) + np.square(v))
-        magnitude = np.log1p(magnitude)
+        scale = np.percentile(magnitude, 95)
+        scale = float(max(scale, 1e-3))
+
+        u = np.clip(u / scale, -3.0, 3.0) / 3.0
+        v = np.clip(v / scale, -3.0, 3.0) / 3.0
+        magnitude = np.clip(magnitude / scale, 0.0, 3.0) / 3.0
 
         orientation = np.arctan2(v, u) / np.pi
         representation = np.stack([u, v, magnitude, orientation], axis=0).astype(np.float32)

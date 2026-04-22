@@ -1,7 +1,9 @@
 import copy
 import os
 import random
+import argparse
 from collections import Counter
+from datetime import datetime
 
 import numpy as np
 import torch
@@ -16,26 +18,33 @@ from src.utils.logger import setup_logger
 from src.utils.metrics import classification_metrics
 
 
+PROJECT_ROOT = os.path.abspath(os.path.dirname(__file__))
+
+
 CONFIG = {
-    "processed_dir": "./data/CASME II/processed",
-    "csv_path": "./data/CASME II/CASME2-coding-20140508.xlsx",
-    "checkpoints_dir": "./checkpoints/7class",
-    "log_dir": "./logs",
-    "batch_size": 10,
-    "pretrain_epochs": 20,
+    "processed_dir": os.path.join(PROJECT_ROOT, "processed_v2"),
+    "csv_path": os.path.join(PROJECT_ROOT, "data", "CASME II", "CASME2-coding-20140508.xlsx"),
+    "checkpoints_dir": os.path.join(PROJECT_ROOT, "checkpoints_v2"),
+    "log_dir": os.path.join(PROJECT_ROOT, "logs"),
+    "batch_size": 16,
+    "pretrain_epochs": 0,
     "finetune_epochs": 50,
-    "pretrain_lr": 3e-4,
-    "finetune_lr": 2e-4,
+    "pretrain_lr": 2e-4,
+    "finetune_lr": 3e-4,
     "min_lr": 2e-5,
-    "weight_decay": 3e-4,
+    "weight_decay": 1e-3,
     "temperature": 0.12,
     "class_balance_beta": 0.999,
-    "focal_gamma": 1.5,
-    "aux_weight": 0.35,
-    "early_stop_patience": 16,
+    "focal_gamma": 0.0,
+    "label_smoothing": 0.04,
+    "aux_weight": 0.20,
+    "early_stop_patience": 18,
     "num_workers": 0,
     "pin_memory": True,
     "seed": 42,
+    "protocol": "loso",
+    "test_size": 0.20,
+    "val_size": 0.20,
     "device": "cuda" if torch.cuda.is_available() else "cpu",
 }
 
@@ -47,6 +56,13 @@ class ClassBalancedFocalLoss(nn.Module):
         self.gamma = gamma
 
     def forward(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+        if self.gamma <= 0:
+            return F.cross_entropy(
+                logits,
+                targets,
+                weight=self.class_weights,
+                label_smoothing=CONFIG["label_smoothing"],
+            )
         log_probs = F.log_softmax(logits, dim=1)
         probs = log_probs.exp()
         target_log_probs = log_probs.gather(1, targets.unsqueeze(1)).squeeze(1)
@@ -129,7 +145,7 @@ def build_sampler(dataset: CASME2FlowDataset, class_weights: torch.Tensor) -> We
 def recompute_geometry(flow: torch.Tensor) -> torch.Tensor:
     u = flow[:, 0:1]
     v = flow[:, 1:2]
-    magnitude = torch.log1p(torch.sqrt(u.square() + v.square() + 1e-8))
+    magnitude = torch.clamp(torch.sqrt(u.square() + v.square() + 1e-8), 0.0, 1.0)
     orientation = torch.atan2(v, u) / np.pi
     return torch.cat([u, v, magnitude, orientation], dim=1)
 
@@ -138,17 +154,12 @@ def augment_flow_batch(flow: torch.Tensor) -> torch.Tensor:
     aug = flow.clone()
 
     flip_h = torch.rand(aug.size(0), device=aug.device) < 0.5
-    flip_v = torch.rand(aug.size(0), device=aug.device) < 0.15
     scale_mask = torch.rand(aug.size(0), device=aug.device) < 0.25
     noise_mask = torch.rand(aug.size(0), device=aug.device) < 0.15
 
     if flip_h.any():
         aug[flip_h] = torch.flip(aug[flip_h], dims=[3])
         aug[flip_h, 0:1] = -aug[flip_h, 0:1]
-
-    if flip_v.any():
-        aug[flip_v] = torch.flip(aug[flip_v], dims=[2])
-        aug[flip_v, 1:2] = -aug[flip_v, 1:2]
 
     if scale_mask.any():
         scales = torch.empty(scale_mask.sum(), 1, 1, 1, device=aug.device).uniform_(0.93, 1.07)
@@ -313,7 +324,18 @@ def run_finetune_stage(
 
     model.load_state_dict(best_state)
     checkpoint_path = os.path.join(CONFIG["checkpoints_dir"], f"best_model_fold_{test_subject}.pth")
-    torch.save(best_state, checkpoint_path)
+    try:
+        torch.save(best_state, checkpoint_path)
+    except Exception as exc:
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        fallback_path = os.path.join(CONFIG["checkpoints_dir"], f"best_model_fold_{test_subject}_{stamp}.pth")
+        try:
+            torch.save(best_state, fallback_path)
+            checkpoint_path = fallback_path
+            logger.warning("Primary checkpoint path failed (%s). Saved to %s", exc, fallback_path)
+        except Exception as fallback_exc:
+            checkpoint_path = ""
+            logger.warning("Checkpoint save skipped: %s; fallback also failed: %s", exc, fallback_exc)
 
     test_metrics = evaluate_model(model, test_loader, criterion_fine, CONFIG["device"])
     logger.info(
@@ -381,10 +403,125 @@ def train_one_fold(fold_id: int, test_subject: str) -> dict[str, object]:
     return run_finetune_stage(model, train_loader, val_loader, test_loader, fine_weights, coarse_weights, test_subject, logger)
 
 
+def stratified_indices(labels: list[int], seed: int, test_size: float, val_size: float) -> tuple[list[int], list[int], list[int]]:
+    rng = np.random.default_rng(seed)
+    by_class: dict[int, list[int]] = {}
+    for idx, label in enumerate(labels):
+        by_class.setdefault(label, []).append(idx)
+
+    train_indices: list[int] = []
+    val_indices: list[int] = []
+    test_indices: list[int] = []
+    for indices in by_class.values():
+        indices = indices.copy()
+        rng.shuffle(indices)
+        n = len(indices)
+        n_test = max(1, int(round(n * test_size))) if n >= 3 else 0
+        remaining = n - n_test
+        n_val = max(1, int(round(remaining * val_size))) if remaining >= 3 else 0
+        test_indices.extend(indices[:n_test])
+        val_indices.extend(indices[n_test : n_test + n_val])
+        train_indices.extend(indices[n_test + n_val :])
+
+    rng.shuffle(train_indices)
+    rng.shuffle(val_indices)
+    rng.shuffle(test_indices)
+    return train_indices, val_indices, test_indices
+
+
+def subset_dataset(dataset: CASME2FlowDataset, indices: list[int]) -> CASME2FlowDataset:
+    clone = copy.copy(dataset)
+    clone.samples = [dataset.samples[idx] for idx in indices]
+    return clone
+
+
+def train_stratified() -> dict[str, object]:
+    logger = setup_logger(CONFIG["log_dir"], "stratified_7class")
+    dataset = CASME2FlowDataset(CONFIG["processed_dir"], CONFIG["csv_path"], subjects=None, augment=False)
+    labels = [sample["label"] for sample in dataset.samples]
+    train_idx, val_idx, test_idx = stratified_indices(
+        labels,
+        seed=CONFIG["seed"],
+        test_size=CONFIG["test_size"],
+        val_size=CONFIG["val_size"],
+    )
+    train_dataset = subset_dataset(dataset, train_idx)
+    val_dataset = subset_dataset(dataset, val_idx)
+    test_dataset = subset_dataset(dataset, test_idx)
+
+    logger.info(
+        "Stratified split | train=%d val=%d test=%d",
+        len(train_dataset),
+        len(val_dataset),
+        len(test_dataset),
+    )
+    logger.info("Train label distribution: %s", Counter(sample["label"] for sample in train_dataset.samples))
+    logger.info("Val label distribution: %s", Counter(sample["label"] for sample in val_dataset.samples))
+    logger.info("Test label distribution: %s", Counter(sample["label"] for sample in test_dataset.samples))
+
+    fine_weights = build_class_weights(train_dataset, CONFIG["class_balance_beta"], key="label")
+    coarse_weights = build_class_weights(train_dataset, CONFIG["class_balance_beta"], key="coarse_label")
+    sampler = build_sampler(train_dataset, fine_weights)
+
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=CONFIG["batch_size"],
+        sampler=sampler,
+        num_workers=CONFIG["num_workers"],
+        pin_memory=CONFIG["pin_memory"] and CONFIG["device"] == "cuda",
+    )
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=CONFIG["batch_size"],
+        shuffle=False,
+        num_workers=CONFIG["num_workers"],
+        pin_memory=CONFIG["pin_memory"] and CONFIG["device"] == "cuda",
+    )
+    test_loader = DataLoader(
+        test_dataset,
+        batch_size=CONFIG["batch_size"],
+        shuffle=False,
+        num_workers=CONFIG["num_workers"],
+        pin_memory=CONFIG["pin_memory"] and CONFIG["device"] == "cuda",
+    )
+
+    model = SFAMNetLite(num_classes=len(EMOTION_CLASSES), coarse_classes=len(COARSE_CLASSES)).to(CONFIG["device"])
+    run_pretrain_stage(model, train_loader, logger)
+    return run_finetune_stage(model, train_loader, val_loader, test_loader, fine_weights, coarse_weights, "stratified", logger)
+
+
 def main() -> None:
+    parser = argparse.ArgumentParser(description="Train 7-class CASME II micro-expression recognizer.")
+    parser.add_argument("--protocol", choices=["loso", "stratified"], default=CONFIG["protocol"])
+    parser.add_argument("--pretrain-epochs", type=int, default=CONFIG["pretrain_epochs"])
+    parser.add_argument("--finetune-epochs", type=int, default=CONFIG["finetune_epochs"])
+    parser.add_argument("--batch-size", type=int, default=CONFIG["batch_size"])
+    parser.add_argument("--processed-dir", default=CONFIG["processed_dir"])
+    parser.add_argument("--checkpoints-dir", default=CONFIG["checkpoints_dir"])
+    parser.add_argument("--seed", type=int, default=CONFIG["seed"])
+    args = parser.parse_args()
+
+    CONFIG["protocol"] = args.protocol
+    CONFIG["pretrain_epochs"] = args.pretrain_epochs
+    CONFIG["finetune_epochs"] = args.finetune_epochs
+    CONFIG["batch_size"] = args.batch_size
+    CONFIG["processed_dir"] = args.processed_dir
+    CONFIG["checkpoints_dir"] = args.checkpoints_dir
+    CONFIG["seed"] = args.seed
+
     os.makedirs(CONFIG["checkpoints_dir"], exist_ok=True)
     os.makedirs(CONFIG["log_dir"], exist_ok=True)
     set_seed(CONFIG["seed"])
+
+    if CONFIG["protocol"] == "stratified":
+        result = train_stratified()
+        metrics = result["metrics"]
+        print("\n" + "=" * 40)
+        print(f"7-class stratified accuracy: {float(metrics['accuracy']) * 100:.2f}%")
+        print(f"7-class stratified UAR: {float(metrics['uar']) * 100:.2f}%")
+        print(f"7-class stratified Macro-F1: {float(metrics['macro_f1']) * 100:.2f}%")
+        print("=" * 40)
+        return
 
     fold_results = []
     all_subjects = [str(i).zfill(2) for i in range(1, 27)]
