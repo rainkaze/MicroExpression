@@ -2,6 +2,7 @@
 data/
 datasets/
 checkpoints/
+SFAMNet-main/
 *.pth
 *.onnx
 outputs/training_result.png
