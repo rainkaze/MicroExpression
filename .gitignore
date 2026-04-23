@@ -1,7 +1,7 @@
 # --- 深度学习相关 ---
 data/
-datasets/
 checkpoints/
+SFAMNet-main/
 *.pth
 *.onnx
 outputs/training_result.png
@@ -16,6 +16,14 @@ ENV/
 env/
 .env
 logs/
+runs/
+results/
+reports/
+processed/
+predictPic/
+outputs/
+docs/
+checkpoints_v2/
 
 # --- IDE (PyCharm / VSCode) ---
 .idea/

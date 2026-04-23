@@ -1,54 +1,48 @@
-import torch
-import torch.nn.functional as F
-from PIL import Image
-from torchvision import transforms
-from model import AttentionNet
 import os
 
+import numpy as np
+import torch
 
-def predict(img_path):
+from src.dataset import EMOTION_CLASSES
+from src.models.sfamnet import SFAMNetLite
+
+
+PROJECT_ROOT = os.path.abspath(os.path.dirname(__file__))
+
+
+def build_flow_representation(u: np.ndarray, v: np.ndarray) -> np.ndarray:
+    magnitude = np.sqrt(np.square(u) + np.square(v))
+    scale = float(max(np.percentile(magnitude, 95), 1e-3))
+    u = np.clip(u / scale, -3.0, 3.0) / 3.0
+    v = np.clip(v / scale, -3.0, 3.0) / 3.0
+    magnitude = np.clip(magnitude / scale, 0.0, 3.0) / 3.0
+    orientation = np.arctan2(v, u) / np.pi
+    return np.stack([u, v, magnitude, orientation], axis=0).astype(np.float32)
+
+
+def quick_predict(u_path: str, v_path: str, model_fold: str = "08") -> None:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model = SFAMNetLite(num_classes=len(EMOTION_CLASSES)).to(device)
 
-    # 1. 类别映射 (请确保顺序与训练时 datasets.ImageFolder 识别的一致)
-    class_map = {
-        0: 'disgust', 1: 'fear', 2: 'happiness', 3: 'others',
-        4: 'repression', 5: 'sadness', 6: 'surprise'
-    }
-
-    # 2. 加载模型
-    model = AttentionNet(num_classes=len(class_map)).to(device)
-    model_path = '../checkpoints/best_model.pth'
-    model.load_state_dict(torch.load(model_path, map_location=device))
+    weight_path = os.path.join(PROJECT_ROOT, "../checkpoints_v2", f"best_model_fold_{model_fold}.pth")
+    model.load_state_dict(torch.load(weight_path, map_location=device))
     model.eval()
 
-    # 3. 图像预处理 (加入了 CenterCrop 解决压扁问题)
-    transform = transforms.Compose([
-        transforms.Resize(128),  # 缩放短边
-        transforms.CenterCrop((128, 128)),  # 居中裁剪，保持纵横比
-        transforms.ToTensor(),
-        transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
-    ])
+    u = np.load(u_path).astype(np.float32)
+    v = np.load(v_path).astype(np.float32)
+    flow = build_flow_representation(u, v)
+    flow_tensor = torch.from_numpy(flow).unsqueeze(0).to(device)
 
-    img = Image.open(img_path).convert('RGB')
-    input_tensor = transform(img).unsqueeze(0).to(device)
-
-    # 4. 推理
     with torch.no_grad():
-        output = model(input_tensor)
-        probabilities = torch.nn.functional.softmax(output, dim=1)[0]
+        output = model(flow_tensor)
+        probs = torch.softmax(output, dim=1)
+        pred = torch.argmax(probs, dim=1).item()
 
-        # 获取前 3 个最高概率的类别索引和数值
-        topk_probs, topk_indices = torch.topk(probabilities, 3)
-
-    print("-" * 35)
-    print(f"📸 目标图片: {img_path}")
-    print("🔍 模型预测可能性排序：")
-    for i in range(3):
-        label = class_map[topk_indices[i].item()]
-        prob = topk_probs[i].item() * 100
-        print(f"   Top {i + 1}: {label:<10} | 置信度: {prob:.2f}%")
-    print("-" * 35)
+    print("--- Prediction Complete ---")
+    print(f"Predicted emotion: {EMOTION_CLASSES[pred]} (confidence: {probs[0][pred]:.2%})")
 
 
 if __name__ == "__main__":
-    predict('../predictPic/pre06.jpg')
+    test_u = os.path.join(PROJECT_ROOT, "processed_v2", "u", "sub01_EP02_01f.npy")
+    test_v = os.path.join(PROJECT_ROOT, "processed_v2", "v", "sub01_EP02_01f.npy")
+    quick_predict(test_u, test_v)
