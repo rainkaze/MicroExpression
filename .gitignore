@@ -17,6 +17,14 @@ ENV/
 env/
 .env
 logs/
+runs/
+results/
+reports/
+processed/
+predictPic/
+outputs/
+docs/
+checkpoints_v2/
 
 # --- IDE (PyCharm / VSCode) ---
 .idea/
