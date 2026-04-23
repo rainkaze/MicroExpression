@@ -1,0 +1,11 @@
+manifest = "reports/casme3_part_a_me_manifest.csv"
+output_dir = "runs/casme3_apex_debug"
+epochs = 10
+batch_size = 48
+image_size = 160
+lr = 0.0003
+weight_decay = 0.0001
+fold = 0
+seed = 42
+num_workers = 0
+device = "cuda"
