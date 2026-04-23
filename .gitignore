@@ -1,6 +1,5 @@
 # --- 深度学习相关 ---
 data/
-datasets/
 checkpoints/
 SFAMNet-main/
 *.pth
