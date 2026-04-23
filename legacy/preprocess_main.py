@@ -150,10 +150,10 @@ class CASME2Preprocessor:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Generate CASME II onset-to-apex-window optical flow.")
-    parser.add_argument("--root-dir", default=os.path.join(PROJECT_ROOT, "data", "CASME II", "CASME2_RAW"))
+    parser.add_argument("--root-dir", default=os.path.join(PROJECT_ROOT, "../data", "CASME II", "CASME2_RAW"))
     parser.add_argument(
         "--csv-path",
-        default=os.path.join(PROJECT_ROOT, "data", "CASME II", "CASME2-coding-20140508.xlsx"),
+        default=os.path.join(PROJECT_ROOT, "../data", "CASME II", "CASME2-coding-20140508.xlsx"),
     )
     parser.add_argument("--output-dir", default=os.path.join(PROJECT_ROOT, "processed_v2"))
     parser.add_argument("--size", type=int, default=128)
