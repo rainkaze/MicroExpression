@@ -26,4 +26,4 @@ early_stop_patience = 8
 
 [output]
 root_dir = "artifacts/runs_dev2"
-run_name = "flow_multibranch_4class"
+run_name = "flow_4class"

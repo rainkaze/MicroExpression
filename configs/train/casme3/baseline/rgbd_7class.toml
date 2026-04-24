@@ -26,4 +26,4 @@ early_stop_patience = 8
 
 [output]
 root_dir = "artifacts/runs_dev2"
-run_name = "rgbd_fusion_7class"
+run_name = "rgbd_7class"

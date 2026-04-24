@@ -28,4 +28,4 @@ sampler_power = 1.0
 
 [output]
 root_dir = "artifacts/runs_dev2"
-run_name = "flow_multibranch_7class_v2"
+run_name = "flow7_main"
