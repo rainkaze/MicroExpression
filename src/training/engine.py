@@ -197,9 +197,11 @@ def train_experiment(config: dict[str, Any], project_root: Path) -> Path:
         ).to(device)
 
         class_weights = _build_class_weights(train_labels, num_classes, device)
+        class_counts = torch.bincount(torch.as_tensor(train_labels, dtype=torch.long), minlength=num_classes).to(device)
         criterion = build_loss(
             loss_name=train_cfg["loss_name"],
             class_weights=class_weights,
+            class_counts=class_counts,
             gamma=float(train_cfg.get("focal_gamma", 2.0)),
             label_smoothing=float(train_cfg.get("label_smoothing", 0.0)),
         )

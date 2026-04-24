@@ -3,7 +3,7 @@ from __future__ import annotations
 import torch
 import torch.nn as nn
 
-from .common import FeatureGate, MediumEncoder, TinyEncoder
+from .common import ChannelSpatialAttention, FeatureGate, MediumEncoder, TinyEncoder
 
 
 class MotionMultiBranchNet(nn.Module):
@@ -165,6 +165,59 @@ class MotionMultiBranchV3Net(nn.Module):
         return self.head(torch.cat([gated_base, interaction], dim=1))
 
 
+class MotionSFAMLiteBranch(nn.Module):
+    def __init__(self, base_channels: int = 8, use_attention: bool = True) -> None:
+        super().__init__()
+        c1 = base_channels
+        c2 = base_channels * 2
+        self.net = nn.Sequential(
+            nn.Conv2d(1, c1, kernel_size=5, padding=2, bias=False),
+            nn.BatchNorm2d(c1),
+            nn.ReLU(inplace=True),
+            ChannelSpatialAttention(c1) if use_attention else nn.Identity(),
+            nn.MaxPool2d(kernel_size=3, stride=3),
+            nn.Conv2d(c1, c2, kernel_size=5, padding=2, bias=False),
+            nn.BatchNorm2d(c2),
+            nn.ReLU(inplace=True),
+            ChannelSpatialAttention(c2) if use_attention else nn.Identity(),
+            nn.AdaptiveAvgPool2d((4, 4)),
+            nn.Flatten(),
+        )
+        self.out_dim = c2 * 4 * 4
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.net(x)
+
+
+class MotionSFAMLiteNet(nn.Module):
+    def __init__(
+        self,
+        num_classes: int,
+        base_channels: int = 8,
+        dropout: float = 0.45,
+    ) -> None:
+        super().__init__()
+        self.encoder_u = MotionSFAMLiteBranch(base_channels=base_channels, use_attention=True)
+        self.encoder_v = MotionSFAMLiteBranch(base_channels=base_channels, use_attention=True)
+        self.encoder_mag = MotionSFAMLiteBranch(base_channels=base_channels, use_attention=True)
+        branch_dim = self.encoder_u.out_dim
+        fused_dim = branch_dim * 3
+        self.head = nn.Sequential(
+            nn.LayerNorm(fused_dim),
+            nn.Dropout(dropout),
+            nn.Linear(fused_dim, 128),
+            nn.ReLU(inplace=True),
+            nn.Dropout(dropout),
+            nn.Linear(128, num_classes),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        feat_u = self.encoder_u(x[:, 0:1])
+        feat_v = self.encoder_v(x[:, 1:2])
+        feat_mag = self.encoder_mag(x[:, 2:3])
+        return self.head(torch.cat([feat_u, feat_v, feat_mag], dim=1))
+
+
 class ApexBaselineNet(nn.Module):
     def __init__(self, num_classes: int, base_channels: int = 32, dropout: float = 0.2) -> None:
         super().__init__()
@@ -197,6 +250,10 @@ def build_model(model_name: str, num_classes: int, input_mode: str, base_channel
         if input_mode != "flow":
             raise ValueError("motion_multibranch_v3 requires input_mode='flow'")
         return MotionMultiBranchV3Net(num_classes=num_classes, base_channels=base_channels, dropout=dropout)
+    if model_name == "motion_sfam_lite":
+        if input_mode != "flow":
+            raise ValueError("motion_sfam_lite requires input_mode='flow'")
+        return MotionSFAMLiteNet(num_classes=num_classes, base_channels=base_channels, dropout=dropout)
     if model_name == "apex_baseline":
         if input_mode != "apex_rgb":
             raise ValueError("apex_baseline requires input_mode='apex_rgb'")

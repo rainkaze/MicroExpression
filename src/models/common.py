@@ -36,6 +36,35 @@ class SEBlock(nn.Module):
         return x * scale
 
 
+class ChannelSpatialAttention(nn.Module):
+    def __init__(self, channels: int, reduction: int = 8, spatial_kernel: int = 7) -> None:
+        super().__init__()
+        hidden = max(channels // reduction, 4)
+        self.channel_mlp = nn.Sequential(
+            nn.Flatten(),
+            nn.Linear(channels, hidden),
+            nn.ReLU(inplace=True),
+            nn.Linear(hidden, channels),
+        )
+        padding = spatial_kernel // 2
+        self.spatial = nn.Conv2d(2, 1, kernel_size=spatial_kernel, padding=padding, bias=False)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        avg_pool = torch.mean(x, dim=(2, 3), keepdim=True)
+        max_pool = torch.amax(x, dim=(2, 3), keepdim=True)
+        channel = self.channel_mlp(avg_pool) + self.channel_mlp(max_pool)
+        x = x * torch.sigmoid(channel).view(x.size(0), x.size(1), 1, 1)
+
+        spatial = torch.cat(
+            [
+                torch.mean(x, dim=1, keepdim=True),
+                torch.amax(x, dim=1, keepdim=True),
+            ],
+            dim=1,
+        )
+        return x * torch.sigmoid(self.spatial(spatial))
+
+
 class ResidualStage(nn.Module):
     def __init__(self, in_channels: int, out_channels: int, stride: int = 1, use_attention: bool = False) -> None:
         super().__init__()
