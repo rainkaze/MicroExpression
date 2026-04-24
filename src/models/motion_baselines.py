@@ -3,7 +3,7 @@ from __future__ import annotations
 import torch
 import torch.nn as nn
 
-from .common import MediumEncoder, TinyEncoder
+from .common import FeatureGate, MediumEncoder, TinyEncoder
 
 
 class MotionMultiBranchNet(nn.Module):
@@ -113,6 +113,58 @@ class MotionMultiBranchV2Net(nn.Module):
         return self.head(torch.cat([fused, mixed], dim=1))
 
 
+class MotionMultiBranchV3Net(nn.Module):
+    def __init__(self, num_classes: int, base_channels: int = 32, dropout: float = 0.3) -> None:
+        super().__init__()
+        self.encoder_u = MediumEncoder(1, base_channels=base_channels, use_attention=True)
+        self.encoder_v = MediumEncoder(1, base_channels=base_channels, use_attention=True)
+        self.encoder_mag = MediumEncoder(1, base_channels=base_channels, use_attention=True)
+        self.encoder_ori = MediumEncoder(1, base_channels=base_channels, use_attention=True)
+
+        branch_dim = self.encoder_u.out_dim
+        fused_dim = branch_dim * 4
+        interaction_dim = branch_dim * 3
+
+        self.base_norm = nn.LayerNorm(fused_dim)
+        self.base_gate = FeatureGate(fused_dim, dropout=dropout * 0.5)
+        self.interaction_gate = FeatureGate(interaction_dim, dropout=dropout * 0.5)
+        self.interaction_mlp = nn.Sequential(
+            nn.LayerNorm(interaction_dim),
+            nn.Linear(interaction_dim, interaction_dim),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(interaction_dim, interaction_dim),
+        )
+        self.head = nn.Sequential(
+            nn.LayerNorm(fused_dim + interaction_dim),
+            nn.Linear(fused_dim + interaction_dim, 512),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(512, 256),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(256, num_classes),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        feat_u = self.encoder_u(x[:, 0:1])
+        feat_v = self.encoder_v(x[:, 1:2])
+        feat_mag = self.encoder_mag(x[:, 2:3])
+        feat_ori = self.encoder_ori(x[:, 3:4])
+
+        base = torch.cat([feat_u, feat_v, feat_mag, feat_ori], dim=1)
+        base = self.base_norm(base)
+        gated_base = self.base_gate(base)
+
+        uv = feat_u * feat_v
+        motion_strength = feat_mag * (feat_u + feat_v) * 0.5
+        geometry = feat_mag * feat_ori
+        interaction = torch.cat([uv, motion_strength, geometry], dim=1)
+        interaction = interaction + self.interaction_mlp(self.interaction_gate(interaction))
+
+        return self.head(torch.cat([gated_base, interaction], dim=1))
+
+
 class ApexBaselineNet(nn.Module):
     def __init__(self, num_classes: int, base_channels: int = 32, dropout: float = 0.2) -> None:
         super().__init__()
@@ -141,6 +193,10 @@ def build_model(model_name: str, num_classes: int, input_mode: str, base_channel
         if input_mode != "flow":
             raise ValueError("motion_multibranch_v2 requires input_mode='flow'")
         return MotionMultiBranchV2Net(num_classes=num_classes, base_channels=base_channels, dropout=dropout)
+    if model_name == "motion_multibranch_v3":
+        if input_mode != "flow":
+            raise ValueError("motion_multibranch_v3 requires input_mode='flow'")
+        return MotionMultiBranchV3Net(num_classes=num_classes, base_channels=base_channels, dropout=dropout)
     if model_name == "apex_baseline":
         if input_mode != "apex_rgb":
             raise ValueError("apex_baseline requires input_mode='apex_rgb'")

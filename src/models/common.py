@@ -108,3 +108,19 @@ class MediumEncoder(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.net(x)
+
+
+class FeatureGate(nn.Module):
+    def __init__(self, dim: int, dropout: float = 0.0) -> None:
+        super().__init__()
+        self.norm = nn.LayerNorm(dim)
+        self.proj = nn.Sequential(
+            nn.Linear(dim, dim),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(dim, dim),
+            nn.Sigmoid(),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return x * self.proj(self.norm(x))

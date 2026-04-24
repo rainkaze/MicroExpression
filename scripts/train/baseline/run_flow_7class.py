@@ -9,4 +9,4 @@ from scripts.train.train_recognition import run_from_config
 
 
 if __name__ == "__main__":
-    run_from_config(Path("configs/train/casme3/flow_multibranch_7class_v2.toml"))
+    run_from_config(Path("configs/train/casme3/flow_7class.toml"))

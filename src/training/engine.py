@@ -11,6 +11,7 @@ import pandas as pd
 import torch
 from sklearn.utils.class_weight import compute_class_weight
 from torch.utils.data import DataLoader, WeightedRandomSampler
+from tqdm import tqdm
 
 from src.datasets import CASME3RecognitionDataset, LABEL_MODES
 from src.models import build_model
@@ -63,6 +64,8 @@ def _run_epoch(
     criterion: torch.nn.Module,
     device: torch.device,
     optimizer: torch.optim.Optimizer | None = None,
+    *,
+    progress_desc: str | None = None,
 ) -> dict:
     train_mode = optimizer is not None
     model.train(train_mode)
@@ -70,7 +73,11 @@ def _run_epoch(
     y_true: list[int] = []
     y_pred: list[int] = []
 
-    for batch in loader:
+    iterator = loader
+    if progress_desc is not None:
+        iterator = tqdm(loader, desc=progress_desc, leave=False)
+
+    for batch in iterator:
         inputs = batch["input"].to(device, non_blocking=True)
         labels = batch["label"].to(device, non_blocking=True)
 
@@ -88,6 +95,9 @@ def _run_epoch(
         total_loss += float(loss.item()) * inputs.size(0)
         y_true.extend(labels.detach().cpu().tolist())
         y_pred.extend(torch.argmax(logits.detach(), dim=1).cpu().tolist())
+
+        if progress_desc is not None:
+            iterator.set_postfix(loss=f"{loss.item():.4f}")
 
     metrics = classification_metrics(y_true, y_pred, num_classes=logits.size(1))
     metrics["loss"] = total_loss / max(1, len(y_true))
@@ -203,8 +213,22 @@ def train_experiment(config: dict[str, Any], project_root: Path) -> Path:
         history: list[dict[str, Any]] = []
 
         for epoch in range(1, int(train_cfg["epochs"]) + 1):
-            train_metrics = _run_epoch(model, train_loader, criterion, device, optimizer)
-            val_metrics = _run_epoch(model, val_loader, criterion, device)
+            print(f"[{run_name}] fold={fold} epoch={epoch}/{int(train_cfg['epochs'])} started", flush=True)
+            train_metrics = _run_epoch(
+                model,
+                train_loader,
+                criterion,
+                device,
+                optimizer,
+                progress_desc=f"{run_name} train e{epoch}",
+            )
+            val_metrics = _run_epoch(
+                model,
+                val_loader,
+                criterion,
+                device,
+                progress_desc=f"{run_name} val e{epoch}",
+            )
             scheduler.step()
             _print_epoch_log(run_name, fold, epoch, int(train_cfg["epochs"]), train_metrics, val_metrics)
 
