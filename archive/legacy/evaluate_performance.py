@@ -6,7 +6,7 @@ import seaborn as sns
 import torch
 from torch.utils.data import DataLoader
 
-from src.dataset import CASME2FlowDataset, EMOTION_CLASSES
+from src.datasets.dataset import CASME2FlowDataset, EMOTION_CLASSES
 from src.models.sfamnet import SFAMNetLite
 from src.utils.metrics import classification_metrics
 
@@ -16,9 +16,9 @@ PROJECT_ROOT = os.path.abspath(os.path.dirname(__file__))
 
 CONFIG = {
     "processed_dir": os.path.join(PROJECT_ROOT, "processed_v2"),
-    "csv_path": os.path.join(PROJECT_ROOT, "../data", "CASME II", "CASME2-coding-20140508.xlsx"),
-    "checkpoints_dir": os.path.join(PROJECT_ROOT, "../checkpoints_v2"),
-    "confusion_matrix_path": os.path.join(PROJECT_ROOT, "../outputs", "confusion_matrix_loso_7class.png"),
+    "csv_path": os.path.join(PROJECT_ROOT, "../../data", "CASME II", "CASME2-coding-20140508.xlsx"),
+    "checkpoints_dir": os.path.join(PROJECT_ROOT, "../../artifacts/checkpoints_v2"),
+    "confusion_matrix_path": os.path.join(PROJECT_ROOT, "../../artifacts/figures/confusion_matrices", "confusion_matrix_loso_7class.png"),
     "device": "cuda" if torch.cuda.is_available() else "cpu",
 }
 

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import sys
 
-from train_casme3_flow import main
+from scripts.train.train_casme3_flow import main
 
 
 if __name__ == "__main__":

@@ -3,7 +3,7 @@ import os
 import numpy as np
 import torch
 
-from src.dataset import EMOTION_CLASSES
+from src.datasets.dataset import EMOTION_CLASSES
 from src.models.sfamnet import SFAMNetLite
 
 
@@ -24,7 +24,7 @@ def quick_predict(u_path: str, v_path: str, model_fold: str = "08") -> None:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = SFAMNetLite(num_classes=len(EMOTION_CLASSES)).to(device)
 
-    weight_path = os.path.join(PROJECT_ROOT, "../checkpoints_v2", f"best_model_fold_{model_fold}.pth")
+    weight_path = os.path.join(PROJECT_ROOT, "../../artifacts/checkpoints_v2", f"best_model_fold_{model_fold}.pth")
     model.load_state_dict(torch.load(weight_path, map_location=device))
     model.eval()
 

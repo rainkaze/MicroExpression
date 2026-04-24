@@ -4,7 +4,6 @@ checkpoints/
 SFAMNet-main/
 *.pth
 *.onnx
-outputs/training_result.png
 
 # --- Python 环境与缓存 ---
 __pycache__/
@@ -15,15 +14,6 @@ venv/
 ENV/
 env/
 .env
-logs/
-runs/
-results/
-reports/
-processed/
-predictPic/
-outputs/
-docs/
-checkpoints_v2/
 
 # --- IDE (PyCharm / VSCode) ---
 .idea/
@@ -34,3 +24,7 @@ checkpoints_v2/
 # --- 系统文件 ---
 .DS_Store
 Thumbs.db
+
+# --- 其他 ---
+artifacts/
+docs/

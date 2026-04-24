@@ -112,7 +112,7 @@ def draw_result(history):
     plt.grid(True, linestyle='--', alpha=0.6)
 
     plt.tight_layout()
-    plt.savefig('./outputs/training_result.png')  # 自动保存结果图
+    plt.savefig('./confusion_matrices/training_result.png')  # 自动保存结果图
     print("\n📈 训练曲线图已保存至项目根目录: training_result.png")
     plt.show()  # 弹出显示
 

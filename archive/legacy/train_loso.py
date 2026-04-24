@@ -12,7 +12,7 @@ import torch.nn.functional as F
 import torch.optim as optim
 from torch.utils.data import DataLoader, WeightedRandomSampler
 
-from src.dataset import CASME2FlowDataset, COARSE_CLASSES, EMOTION_CLASSES
+from src.datasets.dataset import CASME2FlowDataset, COARSE_CLASSES, EMOTION_CLASSES
 from src.models.sfamnet import SFAMNetLite
 from src.utils.logger import setup_logger
 from src.utils.metrics import classification_metrics
@@ -23,9 +23,9 @@ PROJECT_ROOT = os.path.abspath(os.path.dirname(__file__))
 
 CONFIG = {
     "processed_dir": os.path.join(PROJECT_ROOT, "processed_v2"),
-    "csv_path": os.path.join(PROJECT_ROOT, "../data", "CASME II", "CASME2-coding-20140508.xlsx"),
-    "checkpoints_dir": os.path.join(PROJECT_ROOT, "../checkpoints_v2"),
-    "log_dir": os.path.join(PROJECT_ROOT, "../logs"),
+    "csv_path": os.path.join(PROJECT_ROOT, "../../data", "CASME II", "CASME2-coding-20140508.xlsx"),
+    "checkpoints_dir": os.path.join(PROJECT_ROOT, "../../artifacts/checkpoints_v2"),
+    "log_dir": os.path.join(PROJECT_ROOT, "../../artifacts/logs"),
     "batch_size": 16,
     "pretrain_epochs": 0,
     "finetune_epochs": 50,

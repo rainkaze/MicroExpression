@@ -8,11 +8,11 @@ from collections import Counter
 import numpy as np
 import pandas as pd
 
-PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-from src.dataset import EMOTION_TO_LABEL, normalize_emotion_name
+from src.datasets.dataset import EMOTION_TO_LABEL, normalize_emotion_name
 
 
 def main() -> None:
