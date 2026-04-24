@@ -1,0 +1,31 @@
+[data]
+manifest_path = "data/processed/casme3_recognition_v2/casme3_recognition_manifest.csv"
+input_mode = "flow"
+label_mode = "7class"
+clean_only = true
+
+[model]
+name = "motion_multibranch_v2"
+base_channels = 40
+dropout = 0.30
+
+[train]
+epochs = 80
+batch_size = 24
+lr = 0.0002
+weight_decay = 0.001
+num_workers = 0
+seed = 42
+fold = 0
+run_all_folds = false
+device = "cuda"
+loss_name = "focal"
+label_smoothing = 0.02
+focal_gamma = 1.5
+early_stop_patience = 15
+balanced_sampler = true
+sampler_power = 1.0
+
+[output]
+root_dir = "artifacts/runs_dev2"
+run_name = "flow7_main"
