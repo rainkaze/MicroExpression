@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>微表情识别控制台</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <div class="brand-mark">ME</div>
+          <div>
+            <h1>微表情识别控制台</h1>
+            <p>CAS(ME)<sup>3</sup> 四分类推理工具</p>
+          </div>
+        </div>
+
+        <section class="panel model-panel">
+          <div class="panel-title">
+            <span>当前模型</span>
+            <strong id="deviceBadge">加载中</strong>
+          </div>
+          <dl class="meta-grid">
+            <div>
+              <dt>实验名称</dt>
+              <dd id="runName">-</dd>
+            </div>
+            <div>
+              <dt>模型结构</dt>
+              <dd id="modelName">-</dd>
+            </div>
+            <div>
+              <dt>输入类型</dt>
+              <dd id="inputMode">-</dd>
+            </div>
+            <div>
+              <dt>分类协议</dt>
+              <dd id="labelMode">-</dd>
+            </div>
+          </dl>
+          <label class="field-label" for="foldSelect">推理方式</label>
+          <select id="foldSelect" class="select"></select>
+        </section>
+
+        <section class="panel help-panel">
+          <div class="panel-title">
+            <span>这些输入是什么意思</span>
+          </div>
+          <p><strong>onset</strong>：表情开始帧，脸基本还没明显变化。</p>
+          <p><strong>apex</strong>：表情峰值帧，变化最明显。</p>
+          <p><strong>.npy motion tensor</strong>：已经预处理好的光流张量，形状通常是 <code>(4, H, W)</code>，四个通道是水平运动、垂直运动、运动幅值和方向。</p>
+        </section>
+
+        <section class="panel upload-panel">
+          <div class="tabs" role="tablist">
+            <button class="tab active" data-mode="sample" type="button">数据集样本</button>
+            <button class="tab" data-mode="images" type="button">上传图片</button>
+            <button class="tab" data-mode="tensor" type="button">上传张量</button>
+          </div>
+
+          <form id="sampleForm" class="form active-form">
+            <label class="field-label" for="sampleSelect">选择一个本地样本</label>
+            <select id="sampleSelect" class="select"></select>
+            <button class="primary-button" type="submit">
+              <span>识别该样本</span>
+            </button>
+          </form>
+
+          <form id="imageForm" class="form">
+            <label class="drop-zone">
+              <input id="onsetInput" name="onset" type="file" accept="image/*" />
+              <span>上传 onset 开始帧</span>
+              <strong id="onsetName">选择图片</strong>
+            </label>
+            <label class="drop-zone">
+              <input id="apexInput" name="apex" type="file" accept="image/*" />
+              <span>上传 apex 峰值帧</span>
+              <strong id="apexName">选择图片</strong>
+            </label>
+            <button class="primary-button" type="submit">
+              <span>开始识别</span>
+            </button>
+          </form>
+
+          <form id="tensorForm" class="form">
+            <label class="drop-zone wide">
+              <input id="tensorInput" name="tensor" type="file" accept=".npy" />
+              <span>上传预处理光流张量</span>
+              <strong id="tensorName">选择 .npy 文件</strong>
+            </label>
+            <button class="primary-button" type="submit">
+              <span>开始识别</span>
+            </button>
+          </form>
+        </section>
+      </aside>
+
+      <main class="main">
+        <section class="hero">
+          <div>
+            <p class="eyebrow">recognition-only inference</p>
+            <h2 id="predictionTitle">等待输入</h2>
+            <p id="predictionSubtitle">建议先用“数据集样本”体验模型效果，再尝试上传自己的 onset/apex 图片。</p>
+          </div>
+          <div class="score-card">
+            <span>置信度</span>
+            <strong id="confidenceValue">--</strong>
+          </div>
+        </section>
+
+        <section id="sampleInfo" class="panel sample-info hidden">
+          <div class="panel-title">
+            <span>样本信息</span>
+            <strong id="sampleTruth">-</strong>
+          </div>
+          <div id="sampleMeta" class="sample-meta"></div>
+        </section>
+
+        <section class="content-grid">
+          <div class="panel result-panel">
+            <div class="panel-title">
+              <span>各类别概率</span>
+              <strong id="modelCount">-</strong>
+            </div>
+            <div id="probabilities" class="probabilities empty">
+              <p>还没有预测结果。</p>
+            </div>
+          </div>
+
+          <div class="panel stats-panel">
+            <div class="panel-title">
+              <span>输入张量统计</span>
+              <strong id="sourceType">-</strong>
+            </div>
+            <dl class="stat-list">
+              <div>
+                <dt>形状</dt>
+                <dd id="statShape">-</dd>
+              </div>
+              <div>
+                <dt>均值</dt>
+                <dd id="statMean">-</dd>
+              </div>
+              <div>
+                <dt>标准差</dt>
+                <dd id="statStd">-</dd>
+              </div>
+              <div>
+                <dt>数值范围</dt>
+                <dd id="statRange">-</dd>
+              </div>
+            </dl>
+          </div>
+        </section>
+
+        <section class="panel visual-panel">
+          <div class="panel-title">
+            <span>运动特征可视化</span>
+            <strong>u / v / 幅值 / 方向</strong>
+          </div>
+          <div class="visual-frame">
+            <img id="motionImage" alt="运动张量可视化" />
+            <div id="visualEmpty" class="visual-empty">识别后会在这里显示 4 个光流通道。</div>
+          </div>
+        </section>
+
+        <section class="panel history-panel">
+          <div class="panel-title">
+            <span>最近识别记录</span>
+            <button id="clearHistory" class="ghost-button" type="button">清空</button>
+          </div>
+          <div id="historyList" class="history-list"></div>
+        </section>
+      </main>
+    </div>
+
+    <div id="toast" class="toast"></div>
+    <script src="/app.js"></script>
+  </body>
+</html>
