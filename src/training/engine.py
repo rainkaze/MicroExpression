@@ -141,7 +141,7 @@ def train_experiment(config: dict[str, Any], project_root: Path) -> Path:
     manifest_path = project_root / data_cfg["manifest_path"]
     input_mode = data_cfg["input_mode"]
     label_mode = data_cfg["label_mode"]
-    label_column = "emotion_7" if label_mode == "7class" else "emotion_4"
+    label_column = "emotion_4" if label_mode == "4class" else "emotion_7"
     labels = LABEL_MODES[label_mode]
     num_classes = len(labels)
 
@@ -152,6 +152,7 @@ def train_experiment(config: dict[str, Any], project_root: Path) -> Path:
     df = pd.read_csv(manifest_path)
     if data_cfg.get("clean_only", True) and "issues" in df.columns:
         df = df[df["issues"].fillna("").astype(str) == ""].copy()
+    df = df[df[label_column].astype(str).str.strip().str.lower().isin(labels)].copy()
     df = df.reset_index(drop=True)
 
     folds = list(range(5)) if train_cfg.get("run_all_folds", False) else [int(train_cfg["fold"])]

@@ -9,4 +9,4 @@ from scripts.train.train_recognition import run_from_config
 
 
 if __name__ == "__main__":
-    run_from_config(Path("configs/train/casme3/main/flow7_main.toml"))
+    run_from_config(Path("configs/train/casme3/ablation/flow4_ablate_main_regularized_balanced_softmax.toml"))
