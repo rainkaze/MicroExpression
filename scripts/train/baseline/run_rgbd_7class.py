@@ -9,4 +9,4 @@ from scripts.train.train_recognition import run_from_config
 
 
 if __name__ == "__main__":
-    run_from_config(Path("configs/train/casme3/rgbd_7class.toml"))
+    run_from_config(Path("configs/train/casme3/baseline/rgbd_7class.toml"))
