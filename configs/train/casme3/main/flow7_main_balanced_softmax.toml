@@ -19,13 +19,13 @@ seed = 42
 fold = 0
 run_all_folds = false
 device = "cuda"
-loss_name = "focal"
-label_smoothing = 0.02
+loss_name = "balanced_softmax"
+label_smoothing = 0.03
 focal_gamma = 1.5
 early_stop_patience = 15
-balanced_sampler = true
-sampler_power = 1.0
+balanced_sampler = false
+sampler_power = 0.0
 
 [output]
 root_dir = "artifacts/runs_dev2"
-run_name = "flow7_main"
+run_name = "flow7_main_balanced_softmax"

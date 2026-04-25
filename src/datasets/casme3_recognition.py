@@ -13,6 +13,7 @@ from torch.utils.data import Dataset
 LABEL_MODES: dict[str, list[str]] = {
     "7class": ["disgust", "surprise", "others", "fear", "anger", "sad", "happy"],
     "4class": ["negative", "positive", "surprise", "others"],
+    "negative4": ["disgust", "fear", "anger", "sad"],
 }
 
 
@@ -89,7 +90,7 @@ class CASME3RecognitionDataset(Dataset):
 
         labels = LABEL_MODES[label_mode]
         mapping = {name: index for index, name in enumerate(labels)}
-        label_column = "emotion_7" if label_mode == "7class" else "emotion_4"
+        label_column = "emotion_4" if label_mode == "4class" else "emotion_7"
 
         self.records: list[SampleRecord] = []
         for row in df.to_dict("records"):
