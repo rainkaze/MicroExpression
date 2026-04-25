@@ -2,6 +2,7 @@ const state = {
   metadata: null,
   history: [],
   mode: "sample",
+  runName: null,
 };
 
 const sourceNames = {
@@ -15,13 +16,23 @@ const labelNames = {
   positive: "积极",
   surprise: "惊讶",
   others: "其他",
+  disgust: "厌恶",
+  fear: "恐惧",
+  anger: "愤怒",
+  sad: "悲伤",
+  happy: "高兴",
 };
 
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => Array.from(document.querySelectorAll(selector));
 
 function displayLabel(label) {
-  return labelNames[label] ? `${labelNames[label]} (${label})` : label;
+  return labelNames[label] || label;
+}
+
+function displaySampleLabel(label) {
+  const name = displayLabel(label);
+  return name === label ? label : `${name}`;
 }
 
 function formatPct(value) {
@@ -36,17 +47,29 @@ function showToast(message) {
 }
 
 async function loadMetadata() {
-  const response = await fetch("/api/metadata");
+  const suffix = state.runName ? `?run=${encodeURIComponent(state.runName)}` : "";
+  const response = await fetch(`/api/metadata${suffix}`);
   const metadata = await response.json();
   if (!response.ok || metadata.error) {
     throw new Error(metadata.error || "模型信息加载失败。");
   }
   state.metadata = metadata;
+  state.runName = metadata.run_name;
   $("#deviceBadge").textContent = metadata.device;
   $("#runName").textContent = metadata.run_name;
   $("#modelName").textContent = metadata.model_name;
   $("#inputMode").textContent = metadata.input_mode;
   $("#labelMode").textContent = metadata.label_mode;
+
+  const modelSelect = $("#modelSelect");
+  modelSelect.innerHTML = "";
+  metadata.available_runs.forEach((run) => {
+    const option = document.createElement("option");
+    option.value = run.run_name;
+    option.textContent = `${run.label_mode} · ${run.run_name}`;
+    option.selected = run.run_name === metadata.run_name;
+    modelSelect.appendChild(option);
+  });
 
   const select = $("#foldSelect");
   select.innerHTML = "";
@@ -63,7 +86,7 @@ async function loadMetadata() {
 }
 
 async function loadSamples() {
-  const response = await fetch("/api/samples");
+  const response = await fetch(`/api/samples?run=${encodeURIComponent(state.runName)}`);
   const payload = await response.json();
   if (!response.ok || payload.error) {
     throw new Error(payload.error || "样本列表加载失败。");
@@ -73,9 +96,42 @@ async function loadSamples() {
   payload.samples.forEach((sample) => {
     const option = document.createElement("option");
     option.value = sample.sample_id;
-    option.textContent = `${sample.sample_id} · ${displayLabel(sample.label)} · ${sample.subject}`;
+    option.textContent = `${sample.sample_id} · ${displaySampleLabel(sample.label)} · ${sample.subject}`;
     select.appendChild(option);
   });
+}
+
+function bindModelSelect() {
+  $("#modelSelect").addEventListener("change", async (event) => {
+    state.runName = event.target.value;
+    resetResult("模型已切换，请重新选择样本或上传图片进行识别。");
+    state.history = [];
+    renderHistory();
+    try {
+      await loadMetadata();
+      await loadSamples();
+    } catch (error) {
+      showToast(error.message);
+    }
+  });
+}
+
+function resetResult(subtitle = "建议先用“数据集样本”体验模型效果，再尝试上传自己的 onset/apex 图片。") {
+  $("#predictionTitle").textContent = "等待输入";
+  $("#predictionSubtitle").textContent = subtitle;
+  $("#confidenceValue").textContent = "--";
+  $("#modelCount").textContent = "-";
+  $("#sourceType").textContent = "-";
+  $("#probabilities").classList.add("empty");
+  $("#probabilities").innerHTML = "<p>还没有预测结果。</p>";
+  $("#statShape").textContent = "-";
+  $("#statMean").textContent = "-";
+  $("#statStd").textContent = "-";
+  $("#statRange").textContent = "-";
+  $("#sampleInfo").classList.add("hidden");
+  $("#previewPanel").classList.add("hidden");
+  $(".visual-frame").classList.remove("has-image");
+  $("#motionImage").removeAttribute("src");
 }
 
 function bindTabs() {
@@ -112,6 +168,7 @@ async function postForm(url, formData, button) {
   button.querySelector("span").textContent = "识别中...";
   try {
     formData.append("fold", currentFold());
+    formData.append("run_name", state.runName);
     const response = await fetch(url, { method: "POST", body: formData });
     const result = await response.json();
     if (!response.ok || result.error) {
@@ -200,6 +257,7 @@ function renderResult(result) {
   frame.classList.add("has-image");
 
   renderSampleInfo(result.sample);
+  renderPreviews(result.previews);
   addHistory(result);
 }
 
@@ -216,8 +274,24 @@ function renderSampleInfo(sample) {
     <span>主体：${sample.subject}</span>
     <span>视频：${sample.video_code}</span>
     <span>onset/apex/offset：${sample.onset}/${sample.apex}/${sample.offset}</span>
-    <span>7类标签：${sample.emotion_7}</span>
+    <span>7类标签：${displayLabel(sample.emotion_7)}</span>
+    <span>4类标签：${displayLabel(sample.emotion_4)}</span>
   `;
+}
+
+function renderPreviews(previews) {
+  const panel = $("#previewPanel");
+  if (!previews || (!previews.onset && !previews.apex)) {
+    panel.classList.add("hidden");
+    return;
+  }
+  panel.classList.remove("hidden");
+  if (previews.onset) {
+    $("#onsetPreview").src = previews.onset;
+  }
+  if (previews.apex) {
+    $("#apexPreview").src = previews.apex;
+  }
 }
 
 function addHistory(result) {
@@ -256,6 +330,7 @@ function renderHistory() {
 
 async function init() {
   bindTabs();
+  bindModelSelect();
   bindFileNames();
   bindForms();
   $("#clearHistory").addEventListener("click", () => {

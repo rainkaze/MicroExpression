@@ -13,7 +13,7 @@
           <div class="brand-mark">ME</div>
           <div>
             <h1>微表情识别控制台</h1>
-            <p>CAS(ME)<sup>3</sup> 四分类推理工具</p>
+            <p>基于CAS(ME)<sup>3</sup>数据集训练</p>
           </div>
         </div>
 
@@ -40,6 +40,8 @@
               <dd id="labelMode">-</dd>
             </div>
           </dl>
+          <label class="field-label" for="modelSelect">选择模型</label>
+          <select id="modelSelect" class="select"></select>
           <label class="field-label" for="foldSelect">推理方式</label>
           <select id="foldSelect" class="select"></select>
         </section>
@@ -51,6 +53,7 @@
           <p><strong>onset</strong>：表情开始帧，脸基本还没明显变化。</p>
           <p><strong>apex</strong>：表情峰值帧，变化最明显。</p>
           <p><strong>.npy motion tensor</strong>：已经预处理好的光流张量，形状通常是 <code>(4, H, W)</code>，四个通道是水平运动、垂直运动、运动幅值和方向。</p>
+          <p><strong>数据集样本</strong>：从本地 manifest 里读取样本用于演示。五折集成会使用 5 个 fold 的模型，因此它不是严格测试集评估入口。</p>
         </section>
 
         <section class="panel upload-panel">
@@ -118,6 +121,23 @@
           <div id="sampleMeta" class="sample-meta"></div>
         </section>
 
+        <section id="previewPanel" class="panel preview-panel hidden">
+          <div class="panel-title">
+            <span>原始帧预览</span>
+            <strong>onset / apex</strong>
+          </div>
+          <div class="preview-grid">
+            <figure>
+              <img id="onsetPreview" alt="onset 原图" />
+              <figcaption>onset 开始帧</figcaption>
+            </figure>
+            <figure>
+              <img id="apexPreview" alt="apex 原图" />
+              <figcaption>apex 峰值帧</figcaption>
+            </figure>
+          </div>
+        </section>
+
         <section class="content-grid">
           <div class="panel result-panel">
             <div class="panel-title">
@@ -158,7 +178,7 @@
         <section class="panel visual-panel">
           <div class="panel-title">
             <span>运动特征可视化</span>
-            <strong>u / v / 幅值 / 方向</strong>
+            <strong>模型输入的光流通道</strong>
           </div>
           <div class="visual-frame">
             <img id="motionImage" alt="运动张量可视化" />

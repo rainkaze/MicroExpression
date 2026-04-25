@@ -23,7 +23,7 @@ import torch
 
 from src.datasets import LABEL_MODES
 from src.models import build_model
-from src.preprocess.motion import OpticalFlowEngine, build_flow_tensor
+from src.preprocess.motion import OpticalFlowEngine, build_flow_tensor, find_frame
 from src.utils import load_toml_config
 
 
@@ -119,6 +119,7 @@ class RecognitionService:
         tensor = np.load(tensor_path).astype(np.float32)
         result = self._predict_tensor(tensor[:4], fold, source="dataset_sample")
         result["sample"] = sample
+        result["previews"] = self._sample_previews(sample)
         return result
 
     def predict_images(self, onset_bytes: bytes, apex_bytes: bytes, fold: str) -> dict[str, Any]:
@@ -128,7 +129,12 @@ class RecognitionService:
         apex = cv2.resize(apex, (128, 128), interpolation=cv2.INTER_AREA)
         u, v = self.flow_engine.compute(onset, apex)
         tensor = build_flow_tensor(u, v)
-        return self._predict_tensor(tensor, fold, source="computed_flow")
+        result = self._predict_tensor(tensor, fold, source="computed_flow")
+        result["previews"] = {
+            "onset": self._image_bytes_to_data_url(onset_bytes),
+            "apex": self._image_bytes_to_data_url(apex_bytes),
+        }
+        return result
 
     def predict_npy(self, data: bytes, fold: str) -> dict[str, Any]:
         array = np.load(io.BytesIO(data)).astype(np.float32)
@@ -160,6 +166,7 @@ class RecognitionService:
                         "emotion_7": row.get("emotion_7", ""),
                         "emotion_4": row.get("emotion_4", ""),
                         "flow_path": flow_path,
+                        "frame_dir": row.get("frame_dir", ""),
                     }
                 )
         return samples
@@ -168,6 +175,28 @@ class RecognitionService:
         image = Image.open(io.BytesIO(data)).convert("RGB")
         rgb = np.asarray(image, dtype=np.uint8)
         return cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+
+    def _sample_previews(self, sample: dict[str, str]) -> dict[str, str | None]:
+        frame_dir = self.project_root / sample["frame_dir"]
+        onset_path = find_frame(frame_dir, int(float(sample["onset"])))
+        apex_path = find_frame(frame_dir, int(float(sample["apex"])))
+        return {
+            "onset": self._path_to_data_url(onset_path) if onset_path else None,
+            "apex": self._path_to_data_url(apex_path) if apex_path else None,
+        }
+
+    def _path_to_data_url(self, path: Path) -> str:
+        content_type = mimetypes.guess_type(path.name)[0] or "image/jpeg"
+        data = path.read_bytes()
+        return f"data:{content_type};base64," + base64.b64encode(data).decode("ascii")
+
+    def _image_bytes_to_data_url(self, data: bytes) -> str:
+        try:
+            image = Image.open(io.BytesIO(data))
+            content_type = Image.MIME.get(image.format, "image/jpeg")
+        except Exception:
+            content_type = "image/jpeg"
+        return f"data:{content_type};base64," + base64.b64encode(data).decode("ascii")
 
     def _predict_tensor(self, tensor: np.ndarray, fold: str, source: str) -> dict[str, Any]:
         x = torch.from_numpy(np.ascontiguousarray(tensor.astype(np.float32))).unsqueeze(0).to(self.device)
@@ -228,6 +257,59 @@ class RecognitionService:
         return "data:image/png;base64," + base64.b64encode(buffer.getvalue()).decode("ascii")
 
 
+class AppService:
+    def __init__(self, project_root: Path, default_run_dir: Path, device_name: str = "auto") -> None:
+        self.project_root = project_root
+        candidate_dirs = [
+            default_run_dir,
+            project_root / "artifacts" / "runs_dev2" / "flow7_main",
+        ]
+        self.services: dict[str, RecognitionService] = {}
+        for run_dir in candidate_dirs:
+            if run_dir.exists() and run_dir.name not in self.services:
+                self.services[run_dir.name] = RecognitionService(project_root, run_dir, device_name)
+        if not self.services:
+            raise FileNotFoundError("No usable model runs were found.")
+        self.default_run = default_run_dir.name if default_run_dir.name in self.services else next(iter(self.services))
+
+    def get(self, run_name: str | None) -> RecognitionService:
+        key = run_name or self.default_run
+        if key not in self.services:
+            raise ValueError(f"Unknown model run: {key}")
+        return self.services[key]
+
+    def metadata(self, run_name: str | None = None) -> dict[str, Any]:
+        current = self.get(run_name)
+        runs = []
+        for name, service in self.services.items():
+            meta = service.metadata()
+            runs.append(
+                {
+                    "run_name": name,
+                    "label_mode": meta["label_mode"],
+                    "input_mode": meta["input_mode"],
+                    "model_name": meta["model_name"],
+                    "folds": meta["folds"],
+                }
+            )
+        payload = current.metadata()
+        payload["available_runs"] = runs
+        payload["default_run"] = self.default_run
+        return payload
+
+    def sample_options(self, run_name: str | None = None) -> dict[str, Any]:
+        return self.get(run_name).sample_options()
+
+    def predict_sample(self, run_name: str | None, sample_id: str, fold: str) -> dict[str, Any]:
+        return self.get(run_name).predict_sample(sample_id, fold)
+
+    def predict_images(self, run_name: str | None, onset_bytes: bytes, apex_bytes: bytes, fold: str) -> dict[str, Any]:
+        return self.get(run_name).predict_images(onset_bytes, apex_bytes, fold)
+
+    def predict_npy(self, run_name: str | None, data: bytes, fold: str) -> dict[str, Any]:
+        return self.get(run_name).predict_npy(data, fold)
+
+
 def parse_multipart(content_type: str, body: bytes) -> dict[str, UploadedFile | str]:
     boundary_token = "boundary="
     if boundary_token not in content_type:
@@ -271,15 +353,17 @@ def parse_content_disposition(value: str) -> dict[str, str]:
 
 
 class RecognitionHandler(BaseHTTPRequestHandler):
-    service: RecognitionService
+    service: AppService
 
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
+        params = parse_qs(parsed.query)
+        run_name = params.get("run", [None])[0]
         if parsed.path == "/api/metadata":
-            self.write_json(self.service.metadata())
+            self.write_json(self.service.metadata(run_name))
             return
         if parsed.path == "/api/samples":
-            self.write_json(self.service.sample_options())
+            self.write_json(self.service.sample_options(run_name))
             return
         path = "index.html" if parsed.path == "/" else parsed.path.lstrip("/")
         static_path = (STATIC_ROOT / path).resolve()
@@ -302,24 +386,26 @@ class RecognitionHandler(BaseHTTPRequestHandler):
             content_type = self.headers.get("Content-Type", "")
             fields = parse_multipart(content_type, body)
             fold = str(fields.get("fold", "ensemble"))
+            run_name = fields.get("run_name")
+            run_name = run_name if isinstance(run_name, str) else None
             if parsed.path == "/api/predict-images":
                 onset = fields.get("onset")
                 apex = fields.get("apex")
                 if not isinstance(onset, UploadedFile) or not isinstance(apex, UploadedFile):
                     raise ValueError("Upload both onset and apex images.")
-                self.write_json(self.service.predict_images(onset.data, apex.data, fold))
+                self.write_json(self.service.predict_images(run_name, onset.data, apex.data, fold))
                 return
             if parsed.path == "/api/predict-tensor":
                 tensor = fields.get("tensor")
                 if not isinstance(tensor, UploadedFile):
                     raise ValueError("Upload a .npy tensor.")
-                self.write_json(self.service.predict_npy(tensor.data, fold))
+                self.write_json(self.service.predict_npy(run_name, tensor.data, fold))
                 return
             if parsed.path == "/api/predict-sample":
                 sample_id = fields.get("sample_id")
                 if not isinstance(sample_id, str) or not sample_id:
                     raise ValueError("Choose a dataset sample.")
-                self.write_json(self.service.predict_sample(sample_id, fold))
+                self.write_json(self.service.predict_sample(run_name, sample_id, fold))
                 return
             self.send_error(404)
         except Exception as exc:
@@ -349,12 +435,12 @@ def main() -> None:
     parser.add_argument("--device", default="auto", choices=["auto", "cpu", "cuda"])
     args = parser.parse_args()
 
-    service = RecognitionService(PROJECT_ROOT, args.run_dir, args.device)
+    service = AppService(PROJECT_ROOT, args.run_dir, args.device)
     RecognitionHandler.service = service
     server = ThreadingHTTPServer((args.host, args.port), RecognitionHandler)
     print(f"Recognition web app: http://{args.host}:{args.port}")
     print(f"Run: {args.run_dir}")
-    print(f"Device: {service.device}")
+    print(f"Runs: {', '.join(service.services)}")
     server.serve_forever()
 
 

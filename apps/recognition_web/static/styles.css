@@ -389,6 +389,34 @@ dd {
   font-size: 13px;
 }
 
+.preview-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.preview-grid figure {
+  margin: 0;
+  overflow: hidden;
+  border-radius: var(--radius);
+  background: #101416;
+  border: 1px solid var(--line);
+}
+
+.preview-grid img {
+  display: block;
+  width: 100%;
+  max-height: 320px;
+  object-fit: contain;
+  background: #080a0b;
+}
+
+.preview-grid figcaption {
+  padding: 9px 10px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
 .history-item {
   display: grid;
   grid-template-columns: 1fr auto;
@@ -431,6 +459,7 @@ dd {
   }
 
   .content-grid,
+  .preview-grid,
   .hero {
     grid-template-columns: 1fr;
   }
