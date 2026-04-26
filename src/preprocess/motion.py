@@ -78,6 +78,14 @@ def build_flow_tensor(u: np.ndarray, v: np.ndarray) -> np.ndarray:
     return tensor.astype(np.float32)
 
 
+def build_uv_tensor(u: np.ndarray, v: np.ndarray) -> np.ndarray:
+    magnitude = np.sqrt(np.square(u) + np.square(v))
+    scale = float(max(np.percentile(magnitude, 95), 1e-3))
+    u_norm = np.clip(u / scale, -3.0, 3.0) / 3.0
+    v_norm = np.clip(v / scale, -3.0, 3.0) / 3.0
+    return np.stack([u_norm, v_norm], axis=0).astype(np.float32)
+
+
 def build_depth_delta(onset_depth: np.ndarray, apex_depth: np.ndarray) -> np.ndarray:
     valid = (onset_depth > 0) & (apex_depth > 0)
     delta = np.zeros_like(onset_depth, dtype=np.float32)
@@ -88,3 +96,10 @@ def build_depth_delta(onset_depth: np.ndarray, apex_depth: np.ndarray) -> np.nda
         scale = 1.0
     delta = np.clip(delta / scale, -3.0, 3.0) / 3.0
     return delta.astype(np.float32)
+
+
+def build_uvd_tensor(u: np.ndarray, v: np.ndarray, onset_depth: np.ndarray, apex_depth: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    uv = build_uv_tensor(u, v)
+    depth = build_depth_delta(onset_depth, apex_depth)[None, :, :]
+    uvd = np.concatenate([uv, depth], axis=0)
+    return uv.astype(np.float32), depth.astype(np.float32), uvd.astype(np.float32)

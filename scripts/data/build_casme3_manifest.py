@@ -26,7 +26,7 @@ EMOTION_4_MAP = {
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Build a clean CAS(ME)^3 Part A ME manifest for recognition.")
+    parser = argparse.ArgumentParser(description="Build a CAS(ME)^3 Part A ME manifest for recognition-only scene-flow experiments.")
     parser.add_argument(
         "--annotation",
         type=Path,
@@ -40,7 +40,7 @@ def main() -> None:
     parser.add_argument(
         "--output-dir",
         type=Path,
-        default=PROJECT_ROOT / "data" / "processed" / "casme3_recognition_v2",
+        default=PROJECT_ROOT / "data" / "processed" / "casme3_scene_flow",
     )
     args = parser.parse_args()
 
@@ -64,17 +64,18 @@ def main() -> None:
         depth_dir = args.clip_root / "depth" / sample_id
         video_path = args.clip_root / "video" / f"{sample_id}.mp4"
 
-        issues: list[str] = []
+        recognition_issues: list[str] = []
+        clip_issues: list[str] = []
         if not frame_dir.exists():
-            issues.append("missing_frame_dir")
+            recognition_issues.append("missing_frame_dir")
         if not depth_dir.exists():
-            issues.append("missing_depth_dir")
+            recognition_issues.append("missing_depth_dir")
         if not video_path.exists():
-            issues.append("missing_video")
+            clip_issues.append("missing_video")
         if offset < onset:
-            issues.append("offset_before_onset")
+            clip_issues.append("offset_before_onset")
         if not (onset <= apex <= offset):
-            issues.append("apex_outside_onset_offset")
+            clip_issues.append("apex_outside_onset_offset")
 
         onset_frame = find_frame(frame_dir, onset) if frame_dir.exists() else None
         apex_frame = find_frame(frame_dir, apex) if frame_dir.exists() else None
@@ -84,22 +85,27 @@ def main() -> None:
         offset_depth = find_frame(depth_dir, offset) if depth_dir.exists() else None
 
         if onset_frame is None:
-            issues.append("missing_onset_frame")
+            recognition_issues.append("missing_onset_frame")
         if apex_frame is None:
-            issues.append("missing_apex_frame")
+            recognition_issues.append("missing_apex_frame")
+        if onset_depth is None:
+            recognition_issues.append("missing_onset_depth")
+        if apex_depth is None:
+            recognition_issues.append("missing_apex_depth")
         if offset_frame is None:
-            issues.append("missing_offset_frame")
-        if onset_depth is None or apex_depth is None or offset_depth is None:
-            issues.append("missing_depth_frame")
+            clip_issues.append("missing_offset_frame")
+        if offset_depth is None:
+            clip_issues.append("missing_offset_depth")
 
         frame_files = sorted([x for x in frame_dir.iterdir() if x.is_file()]) if frame_dir.exists() else []
         depth_files = sorted([x for x in depth_dir.iterdir() if x.is_file()]) if depth_dir.exists() else []
         frame_depth_name_match = [x.stem for x in frame_files] == [x.stem for x in depth_files] if frame_files and depth_files else False
         if frame_files and depth_files and not frame_depth_name_match:
-            issues.append("frame_depth_names_mismatch")
+            clip_issues.append("frame_depth_names_mismatch")
         if len(frame_files) <= 2:
-            issues.append("very_short_clip")
+            clip_issues.append("very_short_clip")
 
+        all_issues = sorted(set(recognition_issues + clip_issues))
         rows.append(
             {
                 "sample_id": sample_id,
@@ -121,7 +127,12 @@ def main() -> None:
                 "onset_frame_exists": onset_frame is not None,
                 "apex_frame_exists": apex_frame is not None,
                 "offset_frame_exists": offset_frame is not None,
-                "issues": ";".join(sorted(set(issues))),
+                "onset_depth_exists": onset_depth is not None,
+                "apex_depth_exists": apex_depth is not None,
+                "offset_depth_exists": offset_depth is not None,
+                "recognition_issues": ";".join(sorted(set(recognition_issues))),
+                "clip_issues": ";".join(sorted(set(clip_issues))),
+                "issues": ";".join(all_issues),
             }
         )
 
@@ -129,13 +140,13 @@ def main() -> None:
     manifest_path = output_dir / "casme3_manifest.csv"
     manifest.to_csv(manifest_path, index=False, encoding="utf-8-sig")
 
-    clean = manifest[manifest["issues"].fillna("").astype(str) == ""].copy()
+    clean = manifest[manifest["recognition_issues"].fillna("").astype(str) == ""].copy()
     audit_path = output_dir / "casme3_manifest_audit.md"
     audit_lines = [
         "# CAS(ME)^3 Recognition Manifest Audit",
         "",
-        f"- Samples: {len(manifest)}",
-        f"- Clean samples: {len(clean)}",
+        f"- Annotation rows: {len(manifest)}",
+        f"- Recognition-clean samples: {len(clean)}",
         f"- Subjects: {manifest['subject'].nunique()}",
         "",
         "## 7-Class Distribution",
@@ -145,18 +156,25 @@ def main() -> None:
     audit_lines.extend(["", "## 4-Class Distribution"])
     for label, count in clean["emotion_4"].value_counts().sort_index().items():
         audit_lines.append(f"- {label}: {count}")
-    audit_lines.extend(["", "## Issue Distribution"])
+    audit_lines.extend(["", "## Recognition Issue Distribution"])
     issue_counts: dict[str, int] = {}
-    for issue_text in manifest["issues"].fillna("").astype(str):
+    for issue_text in manifest["recognition_issues"].fillna("").astype(str):
         for issue in [item for item in issue_text.split(";") if item]:
             issue_counts[issue] = issue_counts.get(issue, 0) + 1
     for issue, count in sorted(issue_counts.items(), key=lambda item: (-item[1], item[0])):
+        audit_lines.append(f"- {issue}: {count}")
+    audit_lines.extend(["", "## Clip Issue Distribution"])
+    clip_issue_counts: dict[str, int] = {}
+    for issue_text in manifest["clip_issues"].fillna("").astype(str):
+        for issue in [item for item in issue_text.split(";") if item]:
+            clip_issue_counts[issue] = clip_issue_counts.get(issue, 0) + 1
+    for issue, count in sorted(clip_issue_counts.items(), key=lambda item: (-item[1], item[0])):
         audit_lines.append(f"- {issue}: {count}")
     audit_path.write_text("\n".join(audit_lines), encoding="utf-8")
 
     print(f"Saved manifest: {manifest_path}")
     print(f"Saved audit: {audit_path}")
-    print(f"Clean samples: {len(clean)} / {len(manifest)}")
+    print(f"Recognition-clean samples: {len(clean)} / {len(manifest)}")
 
 
 if __name__ == "__main__":

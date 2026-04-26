@@ -150,8 +150,10 @@ def train_experiment(config: dict[str, Any], project_root: Path) -> Path:
     run_root = ensure_dir(project_root / output_cfg["root_dir"] / run_name)
 
     df = pd.read_csv(manifest_path)
-    if data_cfg.get("clean_only", True) and "issues" in df.columns:
-        df = df[df["issues"].fillna("").astype(str) == ""].copy()
+    if data_cfg.get("clean_only", True):
+        issue_column = "recognition_issues" if "recognition_issues" in df.columns else "issues"
+        if issue_column in df.columns:
+            df = df[df[issue_column].fillna("").astype(str) == ""].copy()
     df = df[df[label_column].astype(str).str.strip().str.lower().isin(labels)].copy()
     df = df.reset_index(drop=True)
 
