@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import json
 from pathlib import Path
+from datetime import datetime
 
 import numpy as np
 
@@ -16,12 +17,14 @@ PREFERRED_ORDER = [
     "depth4_baseline_5fold",
     "uvd4_concat_5fold",
     "uvd4_attention_5fold",
+    "uvd4_attention_focal_sampler_5fold",
     "uvd4_masked_attention_5fold",
     "uvd4_residual_masked_attention_5fold",
     "uv7_baseline_5fold",
     "depth7_baseline_5fold",
     "uvd7_concat_5fold",
     "uvd7_attention_5fold",
+    "uvd7_attention_focal_sampler_5fold",
     "uvd7_masked_attention_5fold",
     "uvd7_residual_masked_attention_5fold",
 ]
@@ -92,10 +95,30 @@ def write_csv(path: Path, rows: list[dict]) -> None:
     if not rows:
         return
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8-sig", newline="") as handle:
+    output_path = writable_path(path)
+    with output_path.open("w", encoding="utf-8-sig", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=list(rows[0].keys()))
         writer.writeheader()
         writer.writerows(rows)
+    if output_path != path:
+        print(f"Target file is locked, wrote fallback: {output_path}")
+
+
+def writable_path(path: Path) -> Path:
+    try:
+        with path.open("a", encoding="utf-8"):
+            pass
+        return path
+    except PermissionError:
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        return path.with_name(f"{path.stem}_{stamp}{path.suffix}")
+
+
+def write_text(path: Path, text: str, encoding: str = "utf-8") -> None:
+    output_path = writable_path(path)
+    output_path.write_text(text, encoding=encoding)
+    if output_path != path:
+        print(f"Target file is locked, wrote fallback: {output_path}")
 
 
 def write_markdown(path: Path, summary_rows: list[dict], class_rows: list[dict]) -> None:
@@ -134,7 +157,7 @@ def write_markdown(path: Path, summary_rows: list[dict], class_rows: list[dict])
             )
         lines.append("")
 
-    path.write_text("\n".join(lines), encoding="utf-8")
+    write_text(path, "\n".join(lines), encoding="utf-8")
 
 
 def main() -> None:
@@ -152,7 +175,8 @@ def main() -> None:
     OUTPUT_ROOT.mkdir(parents=True, exist_ok=True)
     write_csv(OUTPUT_ROOT / "scene_flow_run_summary.csv", summary_rows)
     write_csv(OUTPUT_ROOT / "scene_flow_run_class_metrics.csv", class_rows)
-    (OUTPUT_ROOT / "scene_flow_run_confusion_matrices.json").write_text(
+    write_text(
+        OUTPUT_ROOT / "scene_flow_run_confusion_matrices.json",
         json.dumps(confusion_data, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
