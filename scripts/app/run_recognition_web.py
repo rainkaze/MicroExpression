@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import argparse
 import base64
+import warnings
+
+warnings.filterwarnings("ignore", category=DeprecationWarning, message="'cgi' is deprecated.*")
 import cgi
 import io
 import json
@@ -15,6 +18,7 @@ import numpy as np
 import pandas as pd
 from PIL import Image
 import torch
+import cv2
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
@@ -22,6 +26,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from src.datasets import LABEL_MODES
 from src.models import build_model
+from src.preprocess.motion import OpticalFlowEngine, build_depth_delta, build_uv_tensor, build_uvd_tensor
 
 
 STATIC_ROOT = PROJECT_ROOT / "apps" / "recognition_web" / "static"
@@ -107,6 +112,41 @@ def image_to_data_url(rgb: np.ndarray) -> str:
     return f"data:image/png;base64,{data}"
 
 
+def file_to_data_url(path: Path, label: str) -> dict:
+    image = Image.open(path).convert("RGB")
+    image.thumbnail((280, 280))
+    canvas = Image.new("RGB", (280, 280), (245, 248, 250))
+    x = (280 - image.width) // 2
+    y = (280 - image.height) // 2
+    canvas.paste(image, (x, y))
+    buffer = io.BytesIO()
+    canvas.save(buffer, format="PNG")
+    data = base64.b64encode(buffer.getvalue()).decode("ascii")
+    return {"name": label, "src": f"data:image/png;base64,{data}"}
+
+
+def bytes_to_bgr(data: bytes, image_size: int = 128) -> np.ndarray:
+    raw = np.frombuffer(data, dtype=np.uint8)
+    image = cv2.imdecode(raw, cv2.IMREAD_COLOR)
+    if image is None:
+        raise ValueError("无法读取上传图片。")
+    return cv2.resize(image, (image_size, image_size), interpolation=cv2.INTER_AREA)
+
+
+def bytes_to_depth(data: bytes, image_size: int = 128) -> np.ndarray:
+    raw = np.frombuffer(data, dtype=np.uint8)
+    depth = cv2.imdecode(raw, cv2.IMREAD_UNCHANGED)
+    if depth is None:
+        raise ValueError("无法读取上传 depth 图片。")
+    depth = cv2.resize(depth, (image_size, image_size), interpolation=cv2.INTER_NEAREST)
+    return depth.astype(np.float32)
+
+
+def bgr_to_data_url(image: np.ndarray, label: str) -> dict:
+    rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+    return {"name": label, "src": image_to_data_url(rgb)}
+
+
 def channel_stats(array: np.ndarray) -> list[dict]:
     names = ["u", "v", "depth_delta"] if array.shape[0] == 3 else ["u", "v"] if array.shape[0] == 2 else ["depth_delta"]
     rows = []
@@ -125,7 +165,7 @@ def channel_stats(array: np.ndarray) -> list[dict]:
     return rows
 
 
-def visual_payload(array: np.ndarray) -> dict:
+def visual_payload(array: np.ndarray, originals: list[dict] | None = None) -> dict:
     array = to_float_tensor(array)
     images = []
     names = ["u", "v", "depth_delta"] if array.shape[0] == 3 else ["u", "v"] if array.shape[0] == 2 else ["depth_delta"]
@@ -136,7 +176,7 @@ def visual_payload(array: np.ndarray) -> dict:
         images.append({"name": "flow_magnitude", "src": heat_image(magnitude)})
     if array.shape[0] >= 3:
         images.append({"name": "depth_abs", "src": heat_image(np.abs(array[2]))})
-    return {"channels": images, "stats": channel_stats(array)}
+    return {"originals": originals or [], "channels": images, "stats": channel_stats(array)}
 
 
 class ModelRegistry:
@@ -170,6 +210,12 @@ class ModelRegistry:
                 }
             )
         return models
+
+    def set_device(self, device: str) -> None:
+        if device == "cuda" and not torch.cuda.is_available():
+            raise RuntimeError("当前环境不可用 CUDA。")
+        self.device = torch.device(device)
+        self._cache.clear()
 
     def get_meta(self, run_name: str) -> dict:
         for item in self.discover():
@@ -254,22 +300,35 @@ class DataStore:
             for row in df.head(limit).to_dict("records")
         ]
 
-    def load_sample(self, sample_id: str) -> tuple[np.ndarray, dict]:
+    def load_sample(self, sample_id: str) -> tuple[np.ndarray, dict, list[dict]]:
         matches = self.df[self.df["sample_id"].astype(str) == sample_id]
         if matches.empty:
             raise KeyError(f"未找到样本: {sample_id}")
         row = matches.iloc[0].to_dict()
         array = np.load(normalize_path(str(row["uvd_path"]))).astype(np.float32)
+        onset = int(row["onset"])
+        apex = int(row["apex"])
         meta = {
             "sample_id": str(row["sample_id"]),
             "subject": str(row["subject"]),
             "emotion_4": str(row["emotion_4"]),
             "emotion_7": str(row["emotion_7"]),
             "au": str(row.get("au", "")),
-            "onset": int(row["onset"]),
-            "apex": int(row["apex"]),
+            "onset": onset,
+            "apex": apex,
         }
-        return array, meta
+        originals = []
+        frame_dir = normalize_path(str(row["frame_dir"]))
+        depth_dir = normalize_path(str(row["depth_dir"]))
+        for name, path in [
+            ("onset_rgb", frame_dir / f"{onset}.jpg"),
+            ("apex_rgb", frame_dir / f"{apex}.jpg"),
+            ("onset_depth", depth_dir / f"{onset}.png"),
+            ("apex_depth", depth_dir / f"{apex}.png"),
+        ]:
+            if path.exists():
+                originals.append(file_to_data_url(path, name))
+        return array, meta, originals
 
 
 registry = ModelRegistry()
@@ -300,6 +359,12 @@ class RecognitionHandler(BaseHTTPRequestHandler):
         if parsed.path == "/api/predict_upload":
             self.handle_predict_upload()
             return
+        if parsed.path == "/api/predict_images":
+            self.handle_predict_images()
+            return
+        if parsed.path == "/api/device":
+            self.handle_device()
+            return
         json_response(self, {"error": "未知接口"}, status=404)
 
     def handle_predict(self, parsed) -> None:
@@ -309,9 +374,9 @@ class RecognitionHandler(BaseHTTPRequestHandler):
             run_names = [item for item in params.get("models", [""])[0].split(",") if item]
             if not sample_id or not run_names:
                 raise ValueError("需要 sample_id 和 models 参数。")
-            array, sample_meta = store.load_sample(sample_id)
+            array, sample_meta, originals = store.load_sample(sample_id)
             predictions = [registry.predict(run_name, array) for run_name in run_names]
-            json_response(self, {"sample": sample_meta, "predictions": predictions, "visual": visual_payload(array)})
+            json_response(self, {"sample": sample_meta, "predictions": predictions, "visual": visual_payload(array, originals=originals)})
         except Exception as exc:
             json_response(self, {"error": str(exc)}, status=400)
 
@@ -345,6 +410,70 @@ class RecognitionHandler(BaseHTTPRequestHandler):
             )
         except Exception as exc:
             json_response(self, {"error": str(exc)}, status=400)
+
+    def handle_predict_images(self) -> None:
+        try:
+            form = self.read_form()
+            run_names = [item for item in form.getfirst("models", "").split(",") if item]
+            if not run_names:
+                raise ValueError("请至少选择一个模型。")
+            onset_item = form["onset_rgb"] if "onset_rgb" in form else None
+            apex_item = form["apex_rgb"] if "apex_rgb" in form else None
+            if onset_item is None or apex_item is None:
+                raise ValueError("图片预测至少需要 onset_rgb 和 apex_rgb。")
+
+            onset_data = onset_item.file.read()
+            apex_data = apex_item.file.read()
+            onset_bgr = bytes_to_bgr(onset_data)
+            apex_bgr = bytes_to_bgr(apex_data)
+            flow_engine = OpticalFlowEngine("TV-L1")
+            u, v = flow_engine.compute(onset_bgr, apex_bgr)
+            uv = build_uv_tensor(u, v)
+
+            depth_onset_item = form["onset_depth"] if "onset_depth" in form else None
+            depth_apex_item = form["apex_depth"] if "apex_depth" in form else None
+            if depth_onset_item is not None and depth_apex_item is not None and depth_onset_item.filename and depth_apex_item.filename:
+                onset_depth = bytes_to_depth(depth_onset_item.file.read())
+                apex_depth = bytes_to_depth(depth_apex_item.file.read())
+                _, _, array = build_uvd_tensor(u, v, onset_depth, apex_depth)
+            else:
+                array = uv
+
+            predictions = [registry.predict(run_name, array) for run_name in run_names]
+            originals = [
+                bgr_to_data_url(onset_bgr, "uploaded_onset_rgb"),
+                bgr_to_data_url(apex_bgr, "uploaded_apex_rgb"),
+            ]
+            json_response(
+                self,
+                {
+                    "sample": {"sample_id": "uploaded image pair", "source": "uploaded_images"},
+                    "predictions": predictions,
+                    "visual": visual_payload(array, originals=originals),
+                },
+            )
+        except Exception as exc:
+            json_response(self, {"error": str(exc)}, status=400)
+
+    def handle_device(self) -> None:
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+            payload = json.loads(self.rfile.read(length).decode("utf-8") or "{}")
+            registry.set_device(str(payload.get("device", "cpu")))
+            json_response(self, {"device": str(registry.device)})
+        except Exception as exc:
+            json_response(self, {"error": str(exc)}, status=400)
+
+    def read_form(self) -> cgi.FieldStorage:
+        return cgi.FieldStorage(
+            fp=self.rfile,
+            headers=self.headers,
+            environ={
+                "REQUEST_METHOD": "POST",
+                "CONTENT_TYPE": self.headers.get("Content-Type", ""),
+                "CONTENT_LENGTH": self.headers.get("Content-Length", "0"),
+            },
+        )
 
     def serve_static(self, path: str) -> None:
         if path in {"", "/"}:

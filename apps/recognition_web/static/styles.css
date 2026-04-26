@@ -113,7 +113,8 @@ select {
 }
 
 .select,
-.input {
+.input,
+.device-select {
   width: 100%;
   border: 1px solid var(--line);
   border-radius: 6px;
@@ -124,7 +125,8 @@ select {
 }
 
 .select:focus,
-.input:focus {
+.input:focus,
+.device-select:focus {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px rgba(13, 148, 136, 0.12);
 }
@@ -310,6 +312,46 @@ select {
 
 .upload-box small {
   color: var(--muted);
+}
+
+.image-upload-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.small-upload {
+  display: grid;
+  gap: 6px;
+  min-height: 96px;
+  border: 1px dashed #9aa9b7;
+  border-radius: 8px;
+  background: var(--surface-2);
+  padding: 12px;
+  cursor: pointer;
+}
+
+.small-upload input {
+  display: none;
+}
+
+.small-upload span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.small-upload strong {
+  align-self: end;
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+
+.hint-text {
+  margin: 12px 0 0;
+  color: var(--muted);
+  line-height: 1.55;
+  font-size: 13px;
 }
 
 .check-list {

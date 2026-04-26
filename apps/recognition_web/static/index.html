@@ -39,7 +39,13 @@
             <span>运行状态</span>
           </div>
           <div class="status-grid">
-            <div><span>设备</span><strong id="deviceText">-</strong></div>
+            <div>
+              <span>设备</span>
+              <select id="deviceSelect" class="device-select">
+                <option value="cpu">CPU</option>
+                <option value="cuda">GPU</option>
+              </select>
+            </div>
             <div><span>模型数</span><strong id="modelCount">0</strong></div>
             <div><span>输入</span><strong id="inputMode">-</strong></div>
           </div>
@@ -62,6 +68,7 @@
                 <h3>待识别数据</h3>
                 <div class="segmented">
                   <button class="segment active" data-source="dataset">数据集样本</button>
+                  <button class="segment" data-source="images">上传图片</button>
                   <button class="segment" data-source="upload">上传张量</button>
                 </div>
               </div>
@@ -79,15 +86,51 @@
                   <input id="fileInput" type="file" accept=".npy" />
                   <span class="upload-icon">⇧</span>
                   <strong id="fileName">选择 .npy 张量文件</strong>
-                  <small>支持 UVD: (3,H,W)，UV: (2,H,W)，Depth: (1,H,W)</small>
+                  <small>研究复现实验入口。支持 UVD: (3,H,W)，UV: (2,H,W)，Depth: (1,H,W)</small>
                 </label>
+              </div>
+
+              <div id="imagePane" class="data-pane hidden">
+                <div class="image-upload-grid">
+                  <label class="small-upload">
+                    <input id="onsetRgbInput" type="file" accept="image/*" />
+                    <span>onset RGB</span>
+                    <strong id="onsetRgbName">选择起始帧</strong>
+                  </label>
+                  <label class="small-upload">
+                    <input id="apexRgbInput" type="file" accept="image/*" />
+                    <span>apex RGB</span>
+                    <strong id="apexRgbName">选择峰值帧</strong>
+                  </label>
+                  <label class="small-upload">
+                    <input id="onsetDepthInput" type="file" accept="image/*" />
+                    <span>onset depth</span>
+                    <strong id="onsetDepthName">可选</strong>
+                  </label>
+                  <label class="small-upload">
+                    <input id="apexDepthInput" type="file" accept="image/*" />
+                    <span>apex depth</span>
+                    <strong id="apexDepthName">可选</strong>
+                  </label>
+                </div>
+                <p class="hint-text">只上传 RGB 起始帧和峰值帧时，可运行 UV 模型；同时上传两张 depth 图后，可运行 UVD/depth 模型。</p>
               </div>
             </section>
 
             <section class="section">
               <div class="section-header">
-                <h3>输入可视化</h3>
+                <h3>原始图像</h3>
                 <span id="sampleMeta" class="muted">尚未识别</span>
+              </div>
+              <div id="originalGrid" class="channel-grid empty">
+                <span>识别后显示 onset/apex 原始图像和可用 depth 图。</span>
+              </div>
+            </section>
+
+            <section class="section">
+              <div class="section-header">
+                <h3>运动与深度可视化</h3>
+                <span class="muted">模型输入张量</span>
               </div>
               <div id="channelGrid" class="channel-grid empty">
                 <span>识别后显示 u、v、depth_delta 和运动幅值等输入通道。</span>

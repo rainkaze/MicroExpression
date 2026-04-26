@@ -3,6 +3,7 @@ const state = {
   source: "dataset",
   selectedSample: null,
   selectedFile: null,
+  imageFiles: {},
 };
 
 const els = {
@@ -10,18 +11,28 @@ const els = {
   compareModels: document.querySelector("#compareModels"),
   modelMeta: document.querySelector("#modelMeta"),
   modelCount: document.querySelector("#modelCount"),
-  deviceText: document.querySelector("#deviceText"),
+  deviceSelect: document.querySelector("#deviceSelect"),
   inputMode: document.querySelector("#inputMode"),
   sampleSearch: document.querySelector("#sampleSearch"),
   sampleList: document.querySelector("#sampleList"),
   datasetPane: document.querySelector("#datasetPane"),
   uploadPane: document.querySelector("#uploadPane"),
+  imagePane: document.querySelector("#imagePane"),
   fileInput: document.querySelector("#fileInput"),
   fileName: document.querySelector("#fileName"),
+  onsetRgbInput: document.querySelector("#onsetRgbInput"),
+  apexRgbInput: document.querySelector("#apexRgbInput"),
+  onsetDepthInput: document.querySelector("#onsetDepthInput"),
+  apexDepthInput: document.querySelector("#apexDepthInput"),
+  onsetRgbName: document.querySelector("#onsetRgbName"),
+  apexRgbName: document.querySelector("#apexRgbName"),
+  onsetDepthName: document.querySelector("#onsetDepthName"),
+  apexDepthName: document.querySelector("#apexDepthName"),
   runPredict: document.querySelector("#runPredict"),
   predictionCards: document.querySelector("#predictionCards"),
   compareTable: document.querySelector("#compareTable"),
   channelGrid: document.querySelector("#channelGrid"),
+  originalGrid: document.querySelector("#originalGrid"),
   statsTable: document.querySelector("#statsTable"),
   sampleMeta: document.querySelector("#sampleMeta"),
   resultHint: document.querySelector("#resultHint"),
@@ -67,7 +78,7 @@ function selectedModels() {
 async function loadModels() {
   const data = await fetchJson("/api/models");
   state.models = data.models;
-  els.deviceText.textContent = data.device;
+  els.deviceSelect.value = data.device;
   els.modelCount.textContent = String(state.models.length);
   renderModelOptions();
   renderCompareOptions();
@@ -156,6 +167,7 @@ function setSource(source) {
   });
   els.datasetPane.classList.toggle("hidden", source !== "dataset");
   els.uploadPane.classList.toggle("hidden", source !== "upload");
+  els.imagePane.classList.toggle("hidden", source !== "images");
 }
 
 async function runPrediction() {
@@ -171,12 +183,23 @@ async function runPrediction() {
     if (state.source === "dataset") {
       if (!state.selectedSample) throw new Error("请选择待识别样本");
       data = await fetchJson(`/api/predict?sample_id=${encodeURIComponent(state.selectedSample)}&models=${models.join(",")}`);
-    } else {
+    } else if (state.source === "upload") {
       if (!state.selectedFile) throw new Error("请上传 .npy 文件");
       const form = new FormData();
       form.append("models", models.join(","));
       form.append("file", state.selectedFile);
       data = await fetchJson("/api/predict_upload", { method: "POST", body: form });
+    } else {
+      if (!state.imageFiles.onsetRgb || !state.imageFiles.apexRgb) {
+        throw new Error("图片预测至少需要 onset RGB 和 apex RGB。");
+      }
+      const form = new FormData();
+      form.append("models", models.join(","));
+      form.append("onset_rgb", state.imageFiles.onsetRgb);
+      form.append("apex_rgb", state.imageFiles.apexRgb);
+      if (state.imageFiles.onsetDepth) form.append("onset_depth", state.imageFiles.onsetDepth);
+      if (state.imageFiles.apexDepth) form.append("apex_depth", state.imageFiles.apexDepth);
+      data = await fetchJson("/api/predict_images", { method: "POST", body: form });
     }
     renderResult(data);
   } catch (err) {
@@ -261,6 +284,22 @@ function renderComparison(predictions) {
 }
 
 function renderVisual(visual) {
+  if (visual.originals && visual.originals.length) {
+    els.originalGrid.classList.remove("empty");
+    els.originalGrid.innerHTML = visual.originals
+      .map(
+        (item) => `
+        <div class="channel-card original-card">
+          <img src="${item.src}" alt="${item.name}">
+          <span>${item.name}</span>
+        </div>
+      `,
+      )
+      .join("");
+  } else {
+    els.originalGrid.classList.add("empty");
+    els.originalGrid.innerHTML = "<span>上传 .npy 时没有原始图像，只显示张量通道。</span>";
+  }
   els.channelGrid.classList.remove("empty");
   els.channelGrid.innerHTML = visual.channels
     .map(
@@ -292,6 +331,29 @@ function renderVisual(visual) {
       </tbody>
     </table>
   `;
+}
+
+async function switchDevice() {
+  try {
+    const data = await fetchJson("/api/device", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ device: els.deviceSelect.value }),
+    });
+    els.deviceSelect.value = data.device;
+    showToast(`当前推理设备：${data.device}`);
+  } catch (err) {
+    els.deviceSelect.value = "cpu";
+    showToast(err.message, true);
+  }
+}
+
+function bindImageInput(input, key, label) {
+  input.addEventListener("change", () => {
+    const file = input.files[0] || null;
+    state.imageFiles[key] = file;
+    document.querySelector(`#${label}`).textContent = file ? file.name : "可选";
+  });
 }
 
 function selectRecommended() {
@@ -326,6 +388,11 @@ els.fileInput.addEventListener("change", () => {
   state.selectedFile = els.fileInput.files[0] || null;
   els.fileName.textContent = state.selectedFile ? state.selectedFile.name : "选择 .npy 张量文件";
 });
+els.deviceSelect.addEventListener("change", switchDevice);
+bindImageInput(els.onsetRgbInput, "onsetRgb", "onsetRgbName");
+bindImageInput(els.apexRgbInput, "apexRgb", "apexRgbName");
+bindImageInput(els.onsetDepthInput, "onsetDepth", "onsetDepthName");
+bindImageInput(els.apexDepthInput, "apexDepth", "apexDepthName");
 els.runPredict.addEventListener("click", runPrediction);
 
 loadModels().catch((err) => showToast(err.message, true));
