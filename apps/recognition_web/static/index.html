@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>微表情识别展示系统</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <div class="brand-mark">ME</div>
+          <div>
+            <h1>微表情识别系统</h1>
+            <p>CAS(ME)<sup>3</sup> · Scene Flow Attention</p>
+          </div>
+        </div>
+
+        <section class="panel">
+          <div class="panel-title">
+            <span>识别模型</span>
+            <button id="refreshModels" class="icon-button" title="刷新模型">↻</button>
+          </div>
+          <select id="primaryModel" class="select"></select>
+          <div id="modelMeta" class="meta-list"></div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-title">
+            <span>对比模型</span>
+            <button id="selectRecommended" class="mini-button">推荐</button>
+          </div>
+          <div id="compareModels" class="check-list"></div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-title">
+            <span>运行状态</span>
+          </div>
+          <div class="status-grid">
+            <div><span>设备</span><strong id="deviceText">-</strong></div>
+            <div><span>模型数</span><strong id="modelCount">0</strong></div>
+            <div><span>输入</span><strong id="inputMode">-</strong></div>
+          </div>
+        </section>
+      </aside>
+
+      <main class="main">
+        <header class="topbar">
+          <div>
+            <h2>识别与对比工作台</h2>
+            <p>支持数据集样本选择、UVD/UV/depth 张量上传、多模型概率对比和输入通道可视化。</p>
+          </div>
+          <button id="runPredict" class="primary-button">开始识别</button>
+        </header>
+
+        <section class="workspace">
+          <div class="left-column">
+            <section class="section">
+              <div class="section-header">
+                <h3>待识别数据</h3>
+                <div class="segmented">
+                  <button class="segment active" data-source="dataset">数据集样本</button>
+                  <button class="segment" data-source="upload">上传张量</button>
+                </div>
+              </div>
+
+              <div id="datasetPane" class="data-pane">
+                <div class="search-row">
+                  <input id="sampleSearch" class="input" placeholder="搜索 sample_id / subject / label" />
+                  <button id="searchSamples" class="secondary-button">搜索</button>
+                </div>
+                <div id="sampleList" class="sample-list"></div>
+              </div>
+
+              <div id="uploadPane" class="data-pane hidden">
+                <label class="upload-box">
+                  <input id="fileInput" type="file" accept=".npy" />
+                  <span class="upload-icon">⇧</span>
+                  <strong id="fileName">选择 .npy 张量文件</strong>
+                  <small>支持 UVD: (3,H,W)，UV: (2,H,W)，Depth: (1,H,W)</small>
+                </label>
+              </div>
+            </section>
+
+            <section class="section">
+              <div class="section-header">
+                <h3>输入可视化</h3>
+                <span id="sampleMeta" class="muted">尚未识别</span>
+              </div>
+              <div id="channelGrid" class="channel-grid empty">
+                <span>识别后显示 u、v、depth_delta 和运动幅值等输入通道。</span>
+              </div>
+              <div id="statsTable" class="stats-table"></div>
+            </section>
+          </div>
+
+          <div class="right-column">
+            <section class="section result-section">
+              <div class="section-header">
+                <h3>识别结果</h3>
+                <span id="resultHint" class="muted">等待输入</span>
+              </div>
+              <div id="predictionCards" class="prediction-list empty">
+                <span>选择模型和样本后开始识别。</span>
+              </div>
+            </section>
+
+            <section class="section">
+              <div class="section-header">
+                <h3>模型对比</h3>
+                <span class="muted">同一样本下的预测差异</span>
+              </div>
+              <div id="compareTable" class="compare-table"></div>
+            </section>
+
+            <section class="section explanation">
+              <div class="section-header">
+                <h3>解释性说明</h3>
+              </div>
+              <div class="explain-grid">
+                <div>
+                  <strong>通道可视化</strong>
+                  <p>展示的是模型输入张量本身，包括水平光流、垂直光流、深度差分与幅值热力图。</p>
+                </div>
+                <div>
+                  <strong>概率对比</strong>
+                  <p>多个模型对同一样本的 softmax 概率可用于观察 depth、mask 或训练策略对预测的影响。</p>
+                </div>
+                <div>
+                  <strong>注意事项</strong>
+                  <p>当前可视化不是 Grad-CAM，不代表模型因果解释；它用于辅助理解输入运动线索和模型输出差异。</p>
+                </div>
+              </div>
+            </section>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <div id="toast" class="toast hidden"></div>
+    <script src="/app.js"></script>
+  </body>
+</html>
