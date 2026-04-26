@@ -1,0 +1,31 @@
+[data]
+manifest_path = "data/processed/casme3_scene_flow/casme3_scene_flow_manifest.csv"
+input_mode = "uvd"
+label_mode = "7class"
+clean_only = true
+
+[model]
+name = "uvd_attention"
+base_channels = 32
+dropout = 0.30
+
+[train]
+epochs = 70
+batch_size = 32
+lr = 0.0002
+weight_decay = 0.002
+num_workers = 0
+seed = 42
+fold = 0
+run_all_folds = true
+device = "cuda"
+loss_name = "balanced_softmax"
+label_smoothing = 0.02
+focal_gamma = 2.0
+early_stop_patience = 12
+balanced_sampler = false
+sampler_power = 0.0
+
+[output]
+root_dir = "artifacts/runs"
+run_name = "uvd7_attention_5fold"

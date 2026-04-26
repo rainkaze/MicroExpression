@@ -3,200 +3,186 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>微表情识别控制台</title>
+    <title>微表情识别展示系统</title>
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
-    <div class="shell">
+    <div class="app-shell">
       <aside class="sidebar">
         <div class="brand">
           <div class="brand-mark">ME</div>
           <div>
-            <h1>微表情识别控制台</h1>
-            <p>基于CAS(ME)<sup>3</sup>数据集训练</p>
+            <h1>微表情识别系统</h1>
+            <p>CAS(ME)<sup>3</sup> · Scene Flow Attention</p>
           </div>
         </div>
 
-        <section class="panel model-panel">
+        <section class="panel">
           <div class="panel-title">
-            <span>当前模型</span>
-            <strong id="deviceBadge">加载中</strong>
+            <span>识别模型</span>
+            <button id="refreshModels" class="icon-button" title="刷新模型">↻</button>
           </div>
-          <dl class="meta-grid">
-            <div>
-              <dt>实验名称</dt>
-              <dd id="runName">-</dd>
-            </div>
-            <div>
-              <dt>模型结构</dt>
-              <dd id="modelName">-</dd>
-            </div>
-            <div>
-              <dt>输入类型</dt>
-              <dd id="inputMode">-</dd>
-            </div>
-            <div>
-              <dt>分类协议</dt>
-              <dd id="labelMode">-</dd>
-            </div>
-          </dl>
-          <label class="field-label" for="modelSelect">选择模型</label>
-          <select id="modelSelect" class="select"></select>
-          <label class="field-label" for="foldSelect">推理方式</label>
-          <select id="foldSelect" class="select"></select>
+          <select id="primaryModel" class="select"></select>
+          <div id="modelMeta" class="meta-list"></div>
         </section>
 
-        <section class="panel help-panel">
+        <section class="panel">
           <div class="panel-title">
-            <span>这些输入是什么意思</span>
+            <span>对比模型</span>
+            <button id="selectRecommended" class="mini-button">推荐</button>
           </div>
-          <p><strong>onset</strong>：表情开始帧，脸基本还没明显变化。</p>
-          <p><strong>apex</strong>：表情峰值帧，变化最明显。</p>
-          <p><strong>.npy motion tensor</strong>：已经预处理好的光流张量，形状通常是 <code>(4, H, W)</code>，四个通道是水平运动、垂直运动、运动幅值和方向。</p>
-          <p><strong>数据集样本</strong>：从本地 manifest 里读取样本用于演示。五折集成会使用 5 个 fold 的模型，因此它不是严格测试集评估入口。</p>
+          <div id="compareModels" class="check-list"></div>
         </section>
 
-        <section class="panel upload-panel">
-          <div class="tabs" role="tablist">
-            <button class="tab active" data-mode="sample" type="button">数据集样本</button>
-            <button class="tab" data-mode="images" type="button">上传图片</button>
-            <button class="tab" data-mode="tensor" type="button">上传张量</button>
+        <section class="panel">
+          <div class="panel-title">
+            <span>运行状态</span>
           </div>
-
-          <form id="sampleForm" class="form active-form">
-            <label class="field-label" for="sampleSelect">选择一个本地样本</label>
-            <select id="sampleSelect" class="select"></select>
-            <button class="primary-button" type="submit">
-              <span>识别该样本</span>
-            </button>
-          </form>
-
-          <form id="imageForm" class="form">
-            <label class="drop-zone">
-              <input id="onsetInput" name="onset" type="file" accept="image/*" />
-              <span>上传 onset 开始帧</span>
-              <strong id="onsetName">选择图片</strong>
-            </label>
-            <label class="drop-zone">
-              <input id="apexInput" name="apex" type="file" accept="image/*" />
-              <span>上传 apex 峰值帧</span>
-              <strong id="apexName">选择图片</strong>
-            </label>
-            <button class="primary-button" type="submit">
-              <span>开始识别</span>
-            </button>
-          </form>
-
-          <form id="tensorForm" class="form">
-            <label class="drop-zone wide">
-              <input id="tensorInput" name="tensor" type="file" accept=".npy" />
-              <span>上传预处理光流张量</span>
-              <strong id="tensorName">选择 .npy 文件</strong>
-            </label>
-            <button class="primary-button" type="submit">
-              <span>开始识别</span>
-            </button>
-          </form>
+          <div class="status-grid">
+            <div>
+              <span>设备</span>
+              <select id="deviceSelect" class="device-select">
+                <option value="cpu">CPU</option>
+                <option value="cuda">GPU</option>
+              </select>
+            </div>
+            <div><span>模型数</span><strong id="modelCount">0</strong></div>
+            <div><span>输入</span><strong id="inputMode">-</strong></div>
+          </div>
         </section>
       </aside>
 
       <main class="main">
-        <section class="hero">
+        <header class="topbar">
           <div>
-            <p class="eyebrow">recognition-only inference</p>
-            <h2 id="predictionTitle">等待输入</h2>
-            <p id="predictionSubtitle">建议先用“数据集样本”体验模型效果，再尝试上传自己的 onset/apex 图片。</p>
+            <h2>识别与对比工作台</h2>
+            <p>支持数据集样本选择、UVD/UV/depth 张量上传、多模型概率对比和输入通道可视化。</p>
           </div>
-          <div class="score-card">
-            <span>置信度</span>
-            <strong id="confidenceValue">--</strong>
-          </div>
-        </section>
+          <button id="runPredict" class="primary-button">开始识别</button>
+        </header>
 
-        <section id="sampleInfo" class="panel sample-info hidden">
-          <div class="panel-title">
-            <span>样本信息</span>
-            <strong id="sampleTruth">-</strong>
-          </div>
-          <div id="sampleMeta" class="sample-meta"></div>
-        </section>
-
-        <section id="previewPanel" class="panel preview-panel hidden">
-          <div class="panel-title">
-            <span>原始帧预览</span>
-            <strong>onset / apex</strong>
-          </div>
-          <div class="preview-grid">
-            <figure>
-              <img id="onsetPreview" alt="onset 原图" />
-              <figcaption>onset 开始帧</figcaption>
-            </figure>
-            <figure>
-              <img id="apexPreview" alt="apex 原图" />
-              <figcaption>apex 峰值帧</figcaption>
-            </figure>
-          </div>
-        </section>
-
-        <section class="content-grid">
-          <div class="panel result-panel">
-            <div class="panel-title">
-              <span>各类别概率</span>
-              <strong id="modelCount">-</strong>
-            </div>
-            <div id="probabilities" class="probabilities empty">
-              <p>还没有预测结果。</p>
-            </div>
-          </div>
-
-          <div class="panel stats-panel">
-            <div class="panel-title">
-              <span>输入张量统计</span>
-              <strong id="sourceType">-</strong>
-            </div>
-            <dl class="stat-list">
-              <div>
-                <dt>形状</dt>
-                <dd id="statShape">-</dd>
+        <section class="workspace">
+          <div class="left-column">
+            <section class="section">
+              <div class="section-header">
+                <h3>待识别数据</h3>
+                <div class="segmented">
+                  <button class="segment active" data-source="dataset">数据集样本</button>
+                  <button class="segment" data-source="images">上传图片</button>
+                  <button class="segment" data-source="upload">上传张量</button>
+                </div>
               </div>
-              <div>
-                <dt>均值</dt>
-                <dd id="statMean">-</dd>
-              </div>
-              <div>
-                <dt>标准差</dt>
-                <dd id="statStd">-</dd>
-              </div>
-              <div>
-                <dt>数值范围</dt>
-                <dd id="statRange">-</dd>
-              </div>
-            </dl>
-          </div>
-        </section>
 
-        <section class="panel visual-panel">
-          <div class="panel-title">
-            <span>运动特征可视化</span>
-            <strong>模型输入的光流通道</strong>
-          </div>
-          <div class="visual-frame">
-            <img id="motionImage" alt="运动张量可视化" />
-            <div id="visualEmpty" class="visual-empty">识别后会在这里显示 4 个光流通道。</div>
-          </div>
-        </section>
+              <div id="datasetPane" class="data-pane">
+                <div class="search-row">
+                  <input id="sampleSearch" class="input" placeholder="搜索 sample_id / subject / label" />
+                  <button id="searchSamples" class="secondary-button">搜索</button>
+                </div>
+                <div id="sampleList" class="sample-list"></div>
+              </div>
 
-        <section class="panel history-panel">
-          <div class="panel-title">
-            <span>最近识别记录</span>
-            <button id="clearHistory" class="ghost-button" type="button">清空</button>
+              <div id="uploadPane" class="data-pane hidden">
+                <label class="upload-box">
+                  <input id="fileInput" type="file" accept=".npy" />
+                  <span class="upload-icon">⇧</span>
+                  <strong id="fileName">选择 .npy 张量文件</strong>
+                  <small>研究复现实验入口。支持 UVD: (3,H,W)，UV: (2,H,W)，Depth: (1,H,W)</small>
+                </label>
+              </div>
+
+              <div id="imagePane" class="data-pane hidden">
+                <div class="image-upload-grid">
+                  <label class="small-upload">
+                    <input id="onsetRgbInput" type="file" accept="image/*" />
+                    <span>onset RGB</span>
+                    <strong id="onsetRgbName">选择起始帧</strong>
+                  </label>
+                  <label class="small-upload">
+                    <input id="apexRgbInput" type="file" accept="image/*" />
+                    <span>apex RGB</span>
+                    <strong id="apexRgbName">选择峰值帧</strong>
+                  </label>
+                  <label class="small-upload">
+                    <input id="onsetDepthInput" type="file" accept="image/*" />
+                    <span>onset depth</span>
+                    <strong id="onsetDepthName">可选</strong>
+                  </label>
+                  <label class="small-upload">
+                    <input id="apexDepthInput" type="file" accept="image/*" />
+                    <span>apex depth</span>
+                    <strong id="apexDepthName">可选</strong>
+                  </label>
+                </div>
+                <p class="hint-text">只上传 RGB 起始帧和峰值帧时，可运行 UV 模型；同时上传两张 depth 图后，可运行 UVD/depth 模型。</p>
+              </div>
+            </section>
+
+            <section class="section">
+              <div class="section-header">
+                <h3>原始图像</h3>
+                <span id="sampleMeta" class="muted">尚未识别</span>
+              </div>
+              <div id="originalGrid" class="channel-grid empty">
+                <span>识别后显示 onset/apex 原始图像和可用 depth 图。</span>
+              </div>
+            </section>
+
+            <section class="section">
+              <div class="section-header">
+                <h3>运动与深度可视化</h3>
+                <span class="muted">模型输入张量</span>
+              </div>
+              <div id="channelGrid" class="channel-grid empty">
+                <span>识别后显示 u、v、depth_delta 和运动幅值等输入通道。</span>
+              </div>
+              <div id="statsTable" class="stats-table"></div>
+            </section>
           </div>
-          <div id="historyList" class="history-list"></div>
+
+          <div class="right-column">
+            <section class="section result-section">
+              <div class="section-header">
+                <h3>识别结果</h3>
+                <span id="resultHint" class="muted">等待输入</span>
+              </div>
+              <div id="predictionCards" class="prediction-list empty">
+                <span>选择模型和样本后开始识别。</span>
+              </div>
+            </section>
+
+            <section class="section">
+              <div class="section-header">
+                <h3>模型对比</h3>
+                <span class="muted">同一样本下的预测差异</span>
+              </div>
+              <div id="compareTable" class="compare-table"></div>
+            </section>
+
+            <section class="section explanation">
+              <div class="section-header">
+                <h3>解释性说明</h3>
+              </div>
+              <div class="explain-grid">
+                <div>
+                  <strong>通道可视化</strong>
+                  <p>展示的是模型输入张量本身，包括水平光流、垂直光流、深度差分与幅值热力图。</p>
+                </div>
+                <div>
+                  <strong>概率对比</strong>
+                  <p>多个模型对同一样本的 softmax 概率可用于观察 depth、mask 或训练策略对预测的影响。</p>
+                </div>
+                <div>
+                  <strong>注意事项</strong>
+                  <p>当前可视化不是 Grad-CAM，不代表模型因果解释；它用于辅助理解输入运动线索和模型输出差异。</p>
+                </div>
+              </div>
+            </section>
+          </div>
         </section>
       </main>
     </div>
 
-    <div id="toast" class="toast"></div>
+    <div id="toast" class="toast hidden"></div>
     <script src="/app.js"></script>
   </body>
 </html>
